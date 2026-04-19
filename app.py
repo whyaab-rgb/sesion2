@@ -1,372 +1,557 @@
-import os
-import math
-import asyncio
-import time
-from typing import List, Optional
-
-import numpy as np
-import pandas as pd
-import yfinance as yf
-from telegram import Bot
-
-
-# =====================================================
-# CONFIG
-# =====================================================
-WATCHLIST = [
-    "AADI.JK", "AKRA.JK", "ANTM.JK", "ASSA.JK", "BBYB.JK",
-    "BRIS.JK", "BUKA.JK", "CPIN.JK", "DOID.JK", "ELSA.JK",
-    "ERAA.JK", "ESSA.JK", "GOTO.JK", "HEAL.JK", "HRUM.JK",
-    "INCO.JK", "JPFA.JK", "MEDC.JK", "PGEO.JK", "PTBA.JK",
-    "PWON.JK", "RMKE.JK", "SCMA.JK", "SIDO.JK", "SMDR.JK",
-    "SMRA.JK", "TMAS.JK", "TOWR.JK", "WIKA.JK", "WSKT.JK",
-    "ZINC.JK", "BIRD.JK", "MAPI.JK", "ADMR.JK", "DEWA.JK",
-    "ENRG.JK", "EXCL.JK", "ISAT.JK", "MNCN.JK", "TINS.JK"
-]
-
-MAX_PRICE = 1000
-DAILY_PERIOD = "8mo"
-INTRADAY_PERIOD = "1mo"
-DAILY_INTERVAL = "1d"
-INTRADAY_INTERVAL = "1h"
-TOP_N_TELEGRAM = 20
-REFRESH_SECONDS = 60
-EXPORT_CSV = "bsjp_screener_single_table.csv"
-
-
-# =====================================================
-# INDICATORS
-# =====================================================
-def ema(series: pd.Series, span: int) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
-
-
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return (100 - (100 / (1 + rs))).fillna(50)
-
-
-def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    high_low = df["High"] - df["Low"]
-    high_close = (df["High"] - df["Close"].shift()).abs()
-    low_close = (df["Low"] - df["Close"].shift()).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-
-
-def load_data(symbol: str, period: str, interval: str) -> Optional[pd.DataFrame]:
-    try:
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=False, progress=False)
-        if df is None or df.empty:
-            return None
-        df = df.dropna().copy()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
-    except Exception:
-        return None
-
-
-def prepare(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out["ema20"] = ema(out["Close"], 20)
-    out["ema50"] = ema(out["Close"], 50)
-    out["ema200"] = ema(out["Close"], 200)
-    out["rsi14"] = rsi(out["Close"], 14)
-    out["atr14"] = atr(out, 14)
-    out["vol_ma20"] = out["Volume"].rolling(20).mean()
-    out["value"] = out["Close"] * out["Volume"]
-    out["value_ma20"] = out["value"].rolling(20).mean()
-    out["high20"] = out["High"].shift(1).rolling(20).max()
-    out["chg_pct"] = out["Close"].pct_change() * 100
-    out["wick_pct"] = ((out["High"] - out[["Open", "Close"]].max(axis=1)) / out["Close"].replace(0, np.nan) * 100).fillna(0)
-    return out
-
-
-# =====================================================
-# SCREENER LOGIC
-# =====================================================
-def trend_label(last: pd.Series) -> str:
-    if last["Close"] > last["ema20"] > last["ema50"] > last["ema200"]:
-        return "BULL STRONG"
-    if last["Close"] > last["ema20"] > last["ema50"]:
-        return "BULL"
-    if last["Close"] < last["ema20"] < last["ema50"]:
-        return "BEAR"
-    return "NEUTRAL"
-
-
-def phase_label(last: pd.Series) -> str:
-    if last["Close"] > last["high20"]:
-        return "BREAKOUT"
-    if abs(last["Close"] - last["ema20"]) / max(last["Close"], 1e-9) <= 0.03 and last["ema20"] > last["ema50"]:
-        return "AKUM"
-    if last["Volume"] > 1.8 * last["vol_ma20"]:
-        return "MOMENTUM"
-    if last["Close"] < last["ema20"] and last["rsi14"] > 65:
-        return "DISTRIBUSI"
-    return "NEUTRAL"
-
-
-def signal_label(d: pd.Series, i: pd.Series) -> str:
-    breakout = d["Close"] > d["high20"] and d["Volume"] > 1.5 * d["vol_ma20"]
-    rebound = d["Close"] > d["ema20"] and d["chg_pct"] > 0 and d["rsi14"] >= 50
-    pullback = abs(d["Close"] - d["ema20"]) / max(d["Close"], 1e-9) <= 0.025 and d["ema20"] > d["ema50"]
-    intraday_ok = i["Close"] > i["ema20"] and i["ema20"] > i["ema50"] and i["rsi14"] >= 55
-
-    if breakout and intraday_ok:
-        return "BREAKOUT"
-    if rebound and intraday_ok:
-        return "ON TRACK"
-    if pullback and d["rsi14"] >= 45:
-        return "AKUM"
-    if d["rsi14"] > 72:
-        return "WASPADA OB"
-    if d["Close"] < d["ema20"] and d["rsi14"] < 45:
-        return "DIST A"
-    return "WAIT"
-
-
-def action_label(signal: str, i: pd.Series) -> str:
-    if signal in {"BREAKOUT", "ON TRACK", "AKUM"}:
-        return "AT ENTRY" if i["Close"] >= i["ema20"] else "WAIT GC"
-    if signal == "WASPADA OB":
-        return "HOLD"
-    return "WAIT"
-
-
-def probability_score(d: pd.Series, i: pd.Series) -> int:
-    score = 0
-    if d["Close"] <= MAX_PRICE:
-        score += 10
-    if d["ema20"] > d["ema50"]:
-        score += 15
-    if d["Close"] > d["ema20"]:
-        score += 10
-    if d["Close"] > d["high20"]:
-        score += 20
-    if 50 <= d["rsi14"] <= 70:
-        score += 10
-    if d["Volume"] > 1.5 * d["vol_ma20"]:
-        score += 15
-    if i["ema20"] > i["ema50"]:
-        score += 10
-    if i["Close"] > i["ema20"]:
-        score += 5
-    if 55 <= i["rsi14"] <= 75:
-        score += 5
-    return int(score)
-
-
-def rvol_percent(d: pd.Series) -> float:
-    if d["vol_ma20"] and not math.isnan(d["vol_ma20"]):
-        return round(float(d["Volume"] / d["vol_ma20"] * 100), 0)
-    return 0.0
-
-
-def tp_sl(last: pd.Series) -> tuple[float, float, float]:
-    entry = float(last["Close"])
-    atr_value = float(last["atr14"]) if not math.isnan(last["atr14"]) else entry * 0.03
-    tp = entry + 2.0 * atr_value
-    sl = max(entry - 1.2 * atr_value, entry * 0.94)
-    return round(entry, 2), round(tp, 2), round(sl, 2)
-
-
-def normalize_symbol(symbol: str) -> str:
-    symbol = symbol.strip().upper()
-    if not symbol:
-        return ""
-    return symbol if symbol.endswith(".JK") else f"{symbol}.JK"
-
-
-def search_emitens(query: str, symbols: List[str]) -> List[str]:
-    query = query.strip().upper()
-    if not query:
-        return symbols
-    matched = []
-    for symbol in symbols:
-        base = symbol.replace(".JK", "")
-        if query in base:
-            matched.append(symbol)
-    return matched
-
-
-def row_from_symbol(symbol: str) -> Optional[dict]:
-    daily_raw = load_data(symbol, DAILY_PERIOD, DAILY_INTERVAL)
-    intra_raw = load_data(symbol, INTRADAY_PERIOD, INTRADAY_INTERVAL)
-    if daily_raw is None or intra_raw is None:
-        return None
-    if len(daily_raw) < 80 or len(intra_raw) < 60:
-        return None
-
-    daily = prepare(daily_raw)
-    intra = prepare(intra_raw)
-    d = daily.iloc[-1]
-    i = intra.iloc[-1]
-    prev = daily.iloc[-2]
-
-    price = float(d["Close"])
-    if price > MAX_PRICE:
-        return None
-
-    signal = signal_label(d, i)
-    action = action_label(signal, i)
-    entry, tp, sl = tp_sl(d)
-    score = probability_score(d, i)
-    gain = ((price / float(prev["Close"])) - 1) * 100
-    profit_pct = ((tp / entry) - 1) * 100 if entry else 0
-    trend = trend_label(d)
-    phase = phase_label(d)
-    rsi_sig = "UP" if d["rsi14"] >= 50 else "DEAD"
-
-    return {
-        "EMITEN": symbol.replace(".JK", ""),
-        "GAIN": round(gain, 1),
-        "WICK": round(float(d["wick_pct"]), 1),
-        "AKSI": action,
-        "SINYAL": signal,
-        "RVOL": rvol_percent(d),
-        "ENTRY": entry,
-        "NOW": round(price, 2),
-        "TP": tp,
-        "SL": sl,
-        "PROFIT": round(((price / entry) - 1) * 100 if entry else 0, 1),
-        "%TO TP": round(profit_pct, 1),
-        "RSI SIG": rsi_sig,
-        "RSI 5M": round(float(i["rsi14"]), 1),
-        "VAL": round(float(d["value_ma20"]) / 1_000_000, 1) if not math.isnan(d["value_ma20"]) else 0,
-        "FASE": phase,
-        "TREND": trend,
-        "SCORE": score,
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BSJP Screener - Single Table</title>
+  <style>
+    :root {
+      --bg: #08111f;
+      --panel: #0d1b2a;
+      --panel-2: #10253a;
+      --line: #1f3c58;
+      --text: #e8f1ff;
+      --muted: #9eb2cb;
+      --green: #16c784;
+      --red: #ff5b6e;
+      --yellow: #f5b700;
+      --blue: #2d8cff;
+      --purple: #8b5cf6;
+      --orange: #ff8f3d;
     }
 
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      background: linear-gradient(180deg, #07101c 0%, #0a1625 100%);
+      color: var(--text);
+    }
 
-def build_single_table(symbols: List[str]) -> pd.DataFrame:
-    rows = []
-    seen = set()
-    for symbol in symbols:
-        symbol = normalize_symbol(symbol)
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
-        row = row_from_symbol(symbol)
-        if row:
-            rows.append(row)
+    .wrap {
+      max-width: 1800px;
+      margin: 0 auto;
+      padding: 18px;
+    }
 
-    if not rows:
-        return pd.DataFrame()
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
 
-    df = pd.DataFrame(rows)
-    df = df.sort_values(by=["SCORE", "RVOL", "GAIN"], ascending=[False, False, False]).reset_index(drop=True)
-    return df
+    .title-box h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0.3px;
+    }
 
+    .title-box p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
 
-# =====================================================
-# DISPLAY
-# =====================================================
-def print_table(df: pd.DataFrame) -> None:
-    os.system("cls" if os.name == "nt" else "clear")
-    print(f"BSJP SCREENER | harga <= {MAX_PRICE} | auto refresh {REFRESH_SECONDS} detik")
-    print(time.strftime("Update terakhir: %Y-%m-%d %H:%M:%S"))
-    print("=" * 120)
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
 
-    if df.empty:
-        print("Tidak ada emiten yang lolos filter.")
-        return
+    .control {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 140px;
+    }
 
-    cols = [
-        "EMITEN", "GAIN", "WICK", "AKSI", "SINYAL", "RVOL",
-        "ENTRY", "NOW", "TP", "SL", "PROFIT", "%TO TP",
-        "RSI SIG", "RSI 5M", "VAL", "FASE", "TREND"
-    ]
-    print(df[cols].to_string(index=False))
+    .control label {
+      font-size: 12px;
+      color: var(--muted);
+    }
 
+    input, select, button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      outline: none;
+    }
 
+    input:focus, select:focus {
+      border-color: var(--blue);
+    }
 
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      background: linear-gradient(180deg, #15304d 0%, #10253a 100%);
+    }
 
-    lines = [f"📊 BSJP SCREENER | Harga <= {MAX_PRICE}", ""]
-    for _, row in df.head(TOP_N_TELEGRAM).iterrows():
-        lines.append(
-            f"{row['EMITEN']} | {row['SINYAL']} | {row['AKSI']}
-"
-            f"Now {row['NOW']} | Entry {row['ENTRY']} | TP {row['TP']} | SL {row['SL']}
-"
-            f"Gain {row['GAIN']}% | RVOL {row['RVOL']}% | RSI5M {row['RSI 5M']} | {row['TREND']}"
-        )
-        lines.append("-" * 26)
-    return "
-".join(lines)[:4000]
+    button:hover {
+      filter: brightness(1.08);
+    }
 
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 12px 0 16px;
+    }
 
-# =====================================================
-# INTERACTIVE + AUTO REFRESH
-# =====================================================
-def resolve_symbols_from_input(user_input: str) -> List[str]:
-    user_input = user_input.strip()
-    if not user_input or user_input.lower() == "all":
-        return WATCHLIST
+    .card {
+      background: linear-gradient(180deg, rgba(16,37,58,.9), rgba(10,22,37,.96));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.2);
+    }
 
-    if "," in user_input:
-        return [normalize_symbol(x) for x in user_input.split(",") if normalize_symbol(x)]
+    .card .k {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
 
-    matches = search_emitens(user_input, WATCHLIST)
-    if matches:
-        return matches
+    .card .v {
+      font-size: 24px;
+      font-weight: 700;
+    }
 
-    single = normalize_symbol(user_input)
-    return [single] if single else WATCHLIST
+    .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: 0 12px 30px rgba(0,0,0,.24);
+    }
 
+    .table-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #0a1b2d;
+      color: var(--muted);
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
 
-def run_once(symbols: List[str], send_telegram: bool = False) -> pd.DataFrame:
-    df = build_single_table(symbols)
-    print_table(df)
-    if not df.empty:
-        df.to_csv(EXPORT_CSV, index=False)
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1500px;
+    }
 
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #14355a;
+      color: #eef6ff;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+      cursor: pointer;
+    }
 
+    tbody td {
+      padding: 8px;
+      border-bottom: 1px solid rgba(255,255,255,.05);
+      font-size: 13px;
+      white-space: nowrap;
+      text-align: center;
+    }
 
-def auto_refresh_loop(symbols: List[str], send_telegram: bool = False) -> None:
-    while True:
-        try:
-            run_once(symbols, send_telegram=send_telegram)
-        except KeyboardInterrupt:
-            print("
-Auto refresh dihentikan.")
-            break
-        except Exception as exc:
-            print(f"Error: {exc}")
-        time.sleep(REFRESH_SECONDS)
+    tbody tr:nth-child(odd) { background: rgba(255,255,255,.015); }
+    tbody tr:hover { background: rgba(45,140,255,.08); }
 
+    .left { text-align: left; }
+    .ticker {
+      font-weight: 700;
+      color: #d7e8ff;
+    }
 
-def main() -> None:
-    print("=== BSJP Screener ===")
-    print("Ketik 'all' untuk semua watchlist")
-    print("Ketik kode saham, contoh: GOTO")
-    print("Ketik beberapa kode dengan koma, contoh: GOTO,BUKA,BRIS")
-    print("Ketik sebagian nama untuk search, contoh: GO")
-    print("")
+    .gain-up, .up { color: var(--green); font-weight: 700; }
+    .gain-down, .down { color: var(--red); font-weight: 700; }
+    .neutral { color: #d9e6f5; }
 
-    user_input = input("Cari emiten: ").strip()
-    symbols = resolve_symbols_from_input(user_input)
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      min-width: 80px;
+    }
 
-    if not symbols:
-        print("Emiten tidak ditemukan.")
-        return
+    .b-blue { background: rgba(45,140,255,.16); color: #91c0ff; border: 1px solid rgba(45,140,255,.25); }
+    .b-green { background: rgba(22,199,132,.16); color: #8ef1c9; border: 1px solid rgba(22,199,132,.25); }
+    .b-red { background: rgba(255,91,110,.16); color: #ffb2bc; border: 1px solid rgba(255,91,110,.25); }
+    .b-yellow { background: rgba(245,183,0,.16); color: #ffd978; border: 1px solid rgba(245,183,0,.25); }
+    .b-purple { background: rgba(139,92,246,.16); color: #c9b0ff; border: 1px solid rgba(139,92,246,.25); }
+    .b-orange { background: rgba(255,143,61,.16); color: #ffc18e; border: 1px solid rgba(255,143,61,.25); }
+    .b-gray { background: rgba(255,255,255,.08); color: #d4dfec; border: 1px solid rgba(255,255,255,.1); }
 
-    print(f"Memantau: {', '.join([s.replace('.JK', '') for s in symbols])}")
-    choice = input("Aktifkan auto refresh 60 detik? (y/n): ").strip().lower()
-    
+    .footer-note {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
 
-    if choice == "y":
-        auto_refresh_loop(symbols, send_telegram=send_telegram)
-    else:
-        run_once(symbols, send_telegram=send_telegram)
+    .mono { font-variant-numeric: tabular-nums; }
+    .scroll-x { overflow: auto; }
 
+    @media (max-width: 980px) {
+      .stats { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      .title-box h1 { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title-box">
+        <h1>BSJP Screener - Single Table</h1>
+        <p>1 tabel, lebih banyak emiten, filter harga maksimal 1000, auto refresh 60 detik, dan search emiten.</p>
+      </div>
 
-if __name__ == "__main__":
-    main()
+      <div class="controls">
+        <div class="control">
+          <label for="search">Search Emiten</label>
+          <input id="search" type="text" placeholder="Contoh: BBRI, TLKM, BRIS" />
+        </div>
+
+        <div class="control">
+          <label for="priceCap">Batas Harga Maks</label>
+          <input id="priceCap" type="number" min="1" value="1000" />
+        </div>
+
+        <div class="control">
+          <label for="rows">Jumlah Baris</label>
+          <select id="rows">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="75">75</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+
+        <div class="control">
+          <label for="sortBy">Urutkan</label>
+          <select id="sortBy">
+            <option value="gain1">Gain 1</option>
+            <option value="rvol">RVOL</option>
+            <option value="now">Harga Now</option>
+            <option value="rsi5m">RSI 5M</option>
+            <option value="value">Value</option>
+          </select>
+        </div>
+
+        <div class="control">
+          <label for="refreshInfo">Refresh</label>
+          <button id="refreshBtn">Refresh Sekarang</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="card"><div class="k">Jumlah Emiten Tampil</div><div class="v" id="statCount">0</div></div>
+      <div class="card"><div class="k">Harga Maks Aktif</div><div class="v" id="statCap">1000</div></div>
+      <div class="card"><div class="k">Bull Trend</div><div class="v" id="statBull">0</div></div>
+      <div class="card"><div class="k">Bear Trend</div><div class="v" id="statBear">0</div></div>
+      <div class="card"><div class="k">Refresh Berikutnya</div><div class="v" id="statRefresh">60s</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="table-top">
+        <div>Mode: <strong>Single Table</strong></div>
+        <div>Auto refresh setiap <strong>60 detik</strong></div>
+        <div>Last update: <strong id="lastUpdate">-</strong></div>
+      </div>
+
+      <div class="scroll-x">
+        <table id="screenerTable">
+          <thead>
+            <tr>
+              <th data-sort="ticker">Emiten</th>
+              <th data-sort="gain1">Gain 1</th>
+              <th data-sort="wick">Wick</th>
+              <th data-sort="action">Aksi</th>
+              <th data-sort="signal">Sinyal</th>
+              <th data-sort="rvol">RVOL</th>
+              <th data-sort="entry">Entry</th>
+              <th data-sort="now">Now</th>
+              <th data-sort="tp">TP</th>
+              <th data-sort="sl">SL</th>
+              <th data-sort="profit">Profit</th>
+              <th data-sort="toTp">% To TP</th>
+              <th data-sort="rsiSig">RSI Sig</th>
+              <th data-sort="rsi5m">RSI 5M</th>
+              <th data-sort="value">Val</th>
+              <th data-sort="phase">Fase</th>
+              <th data-sort="trend">Trend</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      Catatan: file ini sudah siap untuk tampilan screener. Saat ini data memakai generator demo agar UI langsung jalan. Untuk real-time BSJP/TradingView/RTI/IDX, ganti fungsi <span class="mono">fetchMarketData()</span> ke API atau webhook data Anda. Filter default hanya menampilkan emiten dengan harga <strong>≤ 1000</strong>.
+    </div>
+  </div>
+
+  <script>
+    const STOCK_POOL = [
+      'AADI','ADHI','AKRA','ASBI','ASII','ASSA','BBKP','BBRI','BBYB','BIPI','BJTM','BMRI','BOGA','BRIS','BRMS','BTPS',
+      'BUKA','BUMI','CMRY','CPIN','DOID','ELSA','ENRG','ERAA','ESSA','EXCL','FILM','GOTO','HEAL','HRUM','INCO','INDY',
+      'ISAT','ITMG','JSMR','JPFA','KAEF','KIJA','KLBF','LPKR','LSIP','MAIN','MAPA','MDKA','MEDC','MIDI','MTEL','MYOR',
+      'PGAS','PNLF','PTBA','PTPP','PWON','RAJA','SCMA','SIDO','SMGR','SMRA','SRTG','SSIA','TBIG','TLKM','TOWR','TPIA',
+      'UNTR','UNVR','WIKA','WSKT','ZINC','AMMN','BRPT','TINS','ANTM','BKSL','CLEO','DMAS','HOKI','ICBP','IMPC','IPTV',
+      'ITMG','JKON','MAPI','MARK','NCKL','PNBN','PPRE','PTRO','SAME','SILO','SMDR','TAPG','TKIM','TMAS','TOBA','UCID'
+    ];
+
+    let sortState = { key: 'gain1', dir: 'desc' };
+    let countdown = 60;
+    let autoRefreshTimer = null;
+    let countdownTimer = null;
+    let currentData = [];
+
+    const tbody = document.querySelector('#screenerTable tbody');
+    const searchEl = document.getElementById('search');
+    const priceCapEl = document.getElementById('priceCap');
+    const rowsEl = document.getElementById('rows');
+    const sortByEl = document.getElementById('sortBy');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    function rand(min, max, decimals = 0) {
+      const n = Math.random() * (max - min) + min;
+      return Number(n.toFixed(decimals));
+    }
+
+    function pick(arr) {
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    function formatPct(v) {
+      return `${v > 0 ? '' : ''}${v.toFixed(1)}%`;
+    }
+
+    function formatMoney(v) {
+      if (v >= 1_000_000_000) return (v / 1_000_000_000).toFixed(1) + 'B';
+      if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
+      return v.toLocaleString('id-ID');
+    }
+
+    function actionBadge(action) {
+      const map = {
+        'AT ENTRY': 'b-blue',
+        'WATCH GC': 'b-gray',
+        'HOLD': 'b-purple',
+        'SIAP BELI': 'b-green',
+        'LATE': 'b-orange'
+      };
+      return `<span class="badge ${map[action] || 'b-gray'}">${action}</span>`;
+    }
+
+    function signalBadge(signal) {
+      const map = {
+        'ON TRACK': 'b-green',
+        'DIST': 'b-red',
+        'REBOUND': 'b-orange',
+        'AKUM': 'b-blue',
+        'WAIT': 'b-gray',
+        'SUPER': 'b-purple',
+        'HAKA': 'b-yellow'
+      };
+      return `<span class="badge ${map[signal] || 'b-gray'}">${signal}</span>`;
+    }
+
+    function phaseBadge(phase) {
+      const map = {
+        'AKUM': 'b-purple',
+        'BIG AKUM': 'b-purple',
+        'NETRAL': 'b-gray',
+        'BIG DIST': 'b-red'
+      };
+      return `<span class="badge ${map[phase] || 'b-gray'}">${phase}</span>`;
+    }
+
+    function trendBadge(trend) {
+      return `<span class="badge ${trend === 'BULL' ? 'b-green' : 'b-red'}">${trend}</span>`;
+    }
+
+    async function fetchMarketData() {
+      // DEMO generator. Ganti isi fungsi ini dengan fetch API real-time Anda.
+      const tickers = [...new Set(STOCK_POOL)].slice(0, 90);
+      return tickers.map(ticker => {
+        const now = rand(50, 1000, 0);
+        const gain1 = rand(-4.8, 8.8, 1);
+        const wick = rand(0, 6.5, 1);
+        const rvol = rand(15, 380, 0);
+        const action = pick(['AT ENTRY', 'WATCH GC', 'HOLD', 'SIAP BELI', 'LATE']);
+        const signal = pick(['ON TRACK', 'DIST', 'REBOUND', 'AKUM', 'WAIT', 'SUPER', 'HAKA']);
+        const tp = Math.round(now * (1 + rand(0.01, 0.12, 3)));
+        const sl = Math.round(now * (1 - rand(0.01, 0.08, 3)));
+        const profit = Number((((now - rand(sl, now, 0)) / now) * 100).toFixed(1));
+        const toTp = Number((((tp - now) / now) * 100).toFixed(1));
+        const rsi5m = rand(28, 81, 1);
+        const rsiSig = rsi5m >= 70 ? 'UP' : rsi5m <= 45 ? 'DEAD' : 'UP';
+        const value = Math.round(rand(2_500_000, 980_000_000, 0));
+        const phase = pick(['AKUM', 'BIG AKUM', 'NETRAL', 'BIG DIST']);
+        const trend = gain1 >= 0 ? 'BULL' : 'BEAR';
+
+        return {
+          ticker,
+          gain1,
+          wick,
+          action,
+          signal,
+          rvol,
+          entry: now,
+          now,
+          tp,
+          sl,
+          profit,
+          toTp,
+          rsiSig,
+          rsi5m,
+          value,
+          phase,
+          trend
+        };
+      });
+    }
+
+    function getFilteredSortedData(data) {
+      const q = searchEl.value.trim().toUpperCase();
+      const cap = Number(priceCapEl.value || 1000);
+      const rows = Number(rowsEl.value || 50);
+
+      let result = data.filter(item => item.now <= cap);
+
+      if (q) {
+        result = result.filter(item => item.ticker.includes(q));
+      }
+
+      result.sort((a, b) => {
+        const key = sortState.key;
+        const va = a[key];
+        const vb = b[key];
+        if (typeof va === 'string' && typeof vb === 'string') {
+          return sortState.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+        }
+        return sortState.dir === 'asc' ? va - vb : vb - va;
+      });
+
+      return result.slice(0, rows);
+    }
+
+    function renderTable() {
+      const rows = getFilteredSortedData(currentData);
+
+      tbody.innerHTML = rows.map(item => `
+        <tr>
+          <td class="left ticker">${item.ticker}</td>
+          <td class="${item.gain1 >= 0 ? 'gain-up' : 'gain-down'} mono">${formatPct(item.gain1)}</td>
+          <td class="neutral mono">${formatPct(item.wick)}</td>
+          <td>${actionBadge(item.action)}</td>
+          <td>${signalBadge(item.signal)}</td>
+          <td class="mono">${item.rvol}%</td>
+          <td class="mono">${item.entry}</td>
+          <td class="mono">${item.now}</td>
+          <td class="mono up">${item.tp}</td>
+          <td class="mono down">${item.sl}</td>
+          <td class="mono ${item.profit >= 0 ? 'up' : 'down'}">${formatPct(item.profit)}</td>
+          <td class="mono ${item.toTp >= 3 ? 'up' : 'neutral'}">${formatPct(item.toTp)}</td>
+          <td class="${item.rsiSig === 'UP' ? 'up' : 'down'}">${item.rsiSig}</td>
+          <td class="mono">${item.rsi5m}</td>
+          <td class="mono">${formatMoney(item.value)}</td>
+          <td>${phaseBadge(item.phase)}</td>
+          <td>${trendBadge(item.trend)}</td>
+        </tr>
+      `).join('');
+
+      updateStats(rows);
+    }
+
+    function updateStats(rows) {
+      document.getElementById('statCount').textContent = rows.length;
+      document.getElementById('statCap').textContent = Number(priceCapEl.value || 1000).toLocaleString('id-ID');
+      document.getElementById('statBull').textContent = rows.filter(r => r.trend === 'BULL').length;
+      document.getElementById('statBear').textContent = rows.filter(r => r.trend === 'BEAR').length;
+    }
+
+    async function refreshData() {
+      currentData = await fetchMarketData();
+      renderTable();
+      document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('id-ID');
+      countdown = 60;
+      document.getElementById('statRefresh').textContent = `${countdown}s`;
+    }
+
+    function startAutoRefresh() {
+      clearInterval(autoRefreshTimer);
+      clearInterval(countdownTimer);
+
+      autoRefreshTimer = setInterval(async () => {
+        await refreshData();
+      }, 60000);
+
+      countdownTimer = setInterval(() => {
+        countdown -= 1;
+        if (countdown < 0) countdown = 60;
+        document.getElementById('statRefresh').textContent = `${countdown}s`;
+      }, 1000);
+    }
+
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (sortState.key === key) {
+          sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortState.key = key;
+          sortState.dir = 'desc';
+        }
+        sortByEl.value = key;
+        renderTable();
+      });
+    });
+
+    searchEl.addEventListener('input', renderTable);
+    priceCapEl.addEventListener('input', renderTable);
+    rowsEl.addEventListener('change', renderTable);
+    sortByEl.addEventListener('change', (e) => {
+      sortState.key = e.target.value;
+      sortState.dir = 'desc';
+      renderTable();
+    });
+    refreshBtn.addEventListener('click', refreshData);
+
+    (async function init() {
+      await refreshData();
+      startAutoRefresh();
+    })();
+  </script>
+</body>
+</html>
