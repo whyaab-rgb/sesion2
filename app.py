@@ -13,25 +13,32 @@ st.set_page_config(page_title="High Prob Screener", layout="wide")
 # WATCHLIST PRESET
 # =========================================================
 WATCHLISTS = {
-    "LQ45 Style": [
-        "BBCA.JK", "BMRI.JK", "BBRI.JK", "TLKM.JK", "ASII.JK",
-        "ICBP.JK", "INDF.JK", "UNTR.JK", "ANTM.JK", "ADRO.JK",
-        "MDKA.JK", "PGAS.JK", "CPIN.JK", "KLBF.JK", "SMGR.JK",
-        "AKRA.JK", "EXCL.JK", "ESSA.JK", "INKP.JK", "TKIM.JK"
+    "Sub 1000 - Campuran": [
+        "GOTO.JK", "BUKA.JK", "ERAA.JK", "EXCL.JK", "ISAT.JK",
+        "PGAS.JK", "MEDC.JK", "ANTM.JK", "TINS.JK", "BRIS.JK",
+        "ADMR.JK", "ELSA.JK", "ESSA.JK", "PTPP.JK", "WIKA.JK",
+        "WSKT.JK", "SMDR.JK", "TMAS.JK", "IPTV.JK", "MAPI.JK",
+        "ACES.JK", "SIDO.JK", "MYOR.JK", "PWON.JK", "BSDE.JK",
+        "CTRA.JK", "SCMA.JK", "DOID.JK", "DEWA.JK", "HEAL.JK"
     ],
-    "Banking": [
-        "BBCA.JK", "BMRI.JK", "BBRI.JK", "BBNI.JK", "BRIS.JK",
-        "BNGA.JK", "BDMN.JK", "PNBN.JK", "MEGA.JK", "BTPN.JK"
+    "Sub 1000 - Banking & Finance": [
+        "BRIS.JK", "BNGA.JK", "PNBN.JK", "AGRO.JK", "BABP.JK",
+        "BJTM.JK", "BJBR.JK", "BBYB.JK", "BACA.JK", "BANK.JK"
     ],
-    "Energi & Komoditas": [
-        "ADRO.JK", "ITMG.JK", "PTBA.JK", "PGAS.JK", "MEDC.JK",
-        "ANTM.JK", "INCO.JK", "TINS.JK", "HRUM.JK", "UNTR.JK"
+    "Sub 1000 - Energi & Komoditas": [
+        "PGAS.JK", "MEDC.JK", "ELSA.JK", "ADMR.JK", "DOID.JK",
+        "DEWA.JK", "ANTM.JK", "TINS.JK", "HRUM.JK", "PTBA.JK"
     ],
-    "Consumer": [
-        "ICBP.JK", "INDF.JK", "MYOR.JK", "KLBF.JK", "SIDO.JK",
-        "UNVR.JK", "CPIN.JK", "JPFA.JK", "MAPI.JK", "ACES.JK"
+    "Sub 1000 - Consumer & Retail": [
+        "ERAA.JK", "ACES.JK", "MAPI.JK", "SIDO.JK", "MYOR.JK",
+        "MPPA.JK", "RALS.JK", "LPPF.JK", "AMRT.JK", "MIDI.JK"
+    ],
+    "Sub 1000 - Property & Infrastruktur": [
+        "PWON.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK", "PTPP.JK",
+        "WIKA.JK", "WSKT.JK", "DGIK.JK", "TOTL.JK", "WEGE.JK"
     ],
     "Custom": []
+}
 }
 
 MAX_PRICE = 1000
