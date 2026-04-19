@@ -1,8 +1,8 @@
 import os
 import math
 import asyncio
-from dataclasses import dataclass
-from typing import List, Dict, Optional
+import time
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -10,27 +10,35 @@ import yfinance as yf
 from telegram import Bot
 
 
-# =========================
+# =====================================================
 # CONFIG
-# =========================
+# =====================================================
 WATCHLIST = [
-    "GOTO.JK", "BUKA.JK", "BRIS.JK", "ANTM.JK", "ESSA.JK",
-    "TINS.JK", "ADMR.JK", "ERAA.JK", "TMAS.JK", "WIKA.JK",
+    "AADI.JK", "AKRA.JK", "ANTM.JK", "ASSA.JK", "BBYB.JK",
+    "BRIS.JK", "BUKA.JK", "CPIN.JK", "DOID.JK", "ELSA.JK",
+    "ERAA.JK", "ESSA.JK", "GOTO.JK", "HEAL.JK", "HRUM.JK",
+    "INCO.JK", "JPFA.JK", "MEDC.JK", "PGEO.JK", "PTBA.JK",
+    "PWON.JK", "RMKE.JK", "SCMA.JK", "SIDO.JK", "SMDR.JK",
+    "SMRA.JK", "TMAS.JK", "TOWR.JK", "WIKA.JK", "WSKT.JK",
+    "ZINC.JK", "BIRD.JK", "MAPI.JK", "ADMR.JK", "DEWA.JK",
+    "ENRG.JK", "EXCL.JK", "ISAT.JK", "MNCN.JK", "TINS.JK"
 ]
 
 MAX_PRICE = 1000
-DAILY_PERIOD = "6mo"
+DAILY_PERIOD = "8mo"
 INTRADAY_PERIOD = "1mo"
 DAILY_INTERVAL = "1d"
-INTRADAY_INTERVAL = "1h"  # bisa diganti 30m kalau datanya tersedia
-MIN_AVG_VALUE = 1_000_000_000  # filter likuiditas kasar
+INTRADAY_INTERVAL = "1h"
+TOP_N_TELEGRAM = 20
+REFRESH_SECONDS = 60
+EXPORT_CSV = "bsjp_screener_single_table.csv"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
-# =========================
+# =====================================================
 # INDICATORS
-# =========================
+# =====================================================
 def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
 
@@ -42,8 +50,7 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    out = 100 - (100 / (1 + rs))
-    return out.fillna(50)
+    return (100 - (100 / (1 + rs))).fillna(50)
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -54,13 +61,6 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
 
 
-def rolling_breakout_high(series: pd.Series, lookback: int = 20) -> pd.Series:
-    return series.shift(1).rolling(lookback).max()
-
-
-# =========================
-# DATA LOADER
-# =========================
 def load_data(symbol: str, period: str, interval: str) -> Optional[pd.DataFrame]:
     try:
         df = yf.download(symbol, period=period, interval=interval, auto_adjust=False, progress=False)
@@ -74,33 +74,7 @@ def load_data(symbol: str, period: str, interval: str) -> Optional[pd.DataFrame]
         return None
 
 
-# =========================
-# SCORING ENGINE
-# =========================
-@dataclass
-class ScreenResult:
-    symbol: str
-    price: float
-    gain_pct: float
-    signal: str
-    action: str
-    score: int
-    probability: str
-    entry: float
-    tp1: float
-    tp2: float
-    sl: float
-    profit_pct_tp1: float
-    rsi_daily: float
-    rsi_intraday: float
-    vol_ratio: float
-    value_trade: float
-    phase: str
-    trend: str
-    note: str
-
-
-def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def prepare(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["ema20"] = ema(out["Close"], 20)
     out["ema50"] = ema(out["Close"], 50)
@@ -110,11 +84,16 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["vol_ma20"] = out["Volume"].rolling(20).mean()
     out["value"] = out["Close"] * out["Volume"]
     out["value_ma20"] = out["value"].rolling(20).mean()
-    out["breakout20"] = rolling_breakout_high(out["High"], 20)
+    out["high20"] = out["High"].shift(1).rolling(20).max()
+    out["chg_pct"] = out["Close"].pct_change() * 100
+    out["wick_pct"] = ((out["High"] - out[["Open", "Close"]].max(axis=1)) / out["Close"].replace(0, np.nan) * 100).fillna(0)
     return out
 
 
-def classify_trend(last: pd.Series) -> str:
+# =====================================================
+# SCREENER LOGIC
+# =====================================================
+def trend_label(last: pd.Series) -> str:
     if last["Close"] > last["ema20"] > last["ema50"] > last["ema200"]:
         return "BULL STRONG"
     if last["Close"] > last["ema20"] > last["ema50"]:
@@ -124,272 +103,293 @@ def classify_trend(last: pd.Series) -> str:
     return "NEUTRAL"
 
 
-def classify_phase(last: pd.Series) -> str:
-    if last["Close"] > last["breakout20"]:
+def phase_label(last: pd.Series) -> str:
+    if last["Close"] > last["high20"]:
         return "BREAKOUT"
-    distance = abs(last["Close"] - last["ema20"]) / max(last["Close"], 1e-9)
-    if distance <= 0.03 and last["ema20"] > last["ema50"]:
-        return "PULLBACK"
+    if abs(last["Close"] - last["ema20"]) / max(last["Close"], 1e-9) <= 0.03 and last["ema20"] > last["ema50"]:
+        return "AKUM"
     if last["Volume"] > 1.8 * last["vol_ma20"]:
         return "MOMENTUM"
-    return "BASE"
+    if last["Close"] < last["ema20"] and last["rsi14"] > 65:
+        return "DISTRIBUSI"
+    return "NEUTRAL"
 
 
-def score_daily(daily: pd.DataFrame) -> Dict[str, float]:
-    last = daily.iloc[-1]
-    prev = daily.iloc[-2]
-    score = 0
-    notes = []
+def signal_label(d: pd.Series, i: pd.Series) -> str:
+    breakout = d["Close"] > d["high20"] and d["Volume"] > 1.5 * d["vol_ma20"]
+    rebound = d["Close"] > d["ema20"] and d["chg_pct"] > 0 and d["rsi14"] >= 50
+    pullback = abs(d["Close"] - d["ema20"]) / max(d["Close"], 1e-9) <= 0.025 and d["ema20"] > d["ema50"]
+    intraday_ok = i["Close"] > i["ema20"] and i["ema20"] > i["ema50"] and i["rsi14"] >= 55
 
-    if last["Close"] <= MAX_PRICE:
-        score += 10
-        notes.append("harga<=1000")
-    else:
-        notes.append("harga>1000")
-
-    if last["ema20"] > last["ema50"]:
-        score += 15
-        notes.append("ema20>ema50")
-
-    if last["Close"] > last["ema20"]:
-        score += 10
-        notes.append("close>ema20")
-
-    if last["Close"] > last["breakout20"]:
-        score += 20
-        notes.append("breakout20")
-
-    if 52 <= last["rsi14"] <= 72:
-        score += 15
-        notes.append("rsi sehat")
-    elif 45 <= last["rsi14"] < 52:
-        score += 8
-        notes.append("rsi pullback")
-
-    vol_ratio = float(last["Volume"] / last["vol_ma20"]) if last["vol_ma20"] and not math.isnan(last["vol_ma20"]) else 0
-    if vol_ratio >= 2.0:
-        score += 20
-        notes.append("volume x2")
-    elif vol_ratio >= 1.5:
-        score += 12
-        notes.append("volume spike")
-
-    avg_value = float(last["value_ma20"]) if not math.isnan(last["value_ma20"]) else 0
-    if avg_value >= MIN_AVG_VALUE:
-        score += 10
-        notes.append("likuid")
-
-    gain_pct = ((last["Close"] / prev["Close"]) - 1) * 100
-
-    return {
-        "score": score,
-        "gain_pct": gain_pct,
-        "vol_ratio": vol_ratio,
-        "avg_value": avg_value,
-        "notes": ", ".join(notes),
-    }
-
-
-def score_intraday(intra: pd.DataFrame) -> Dict[str, float]:
-    last = intra.iloc[-1]
-    score = 0
-    notes = []
-
-    if last["Close"] > last["ema20"]:
-        score += 10
-        notes.append("intra close>ema20")
-    if last["ema20"] > last["ema50"]:
-        score += 10
-        notes.append("intra ema20>ema50")
-    if 55 <= last["rsi14"] <= 75:
-        score += 10
-        notes.append("intra rsi sehat")
-
-    vol_ratio = float(last["Volume"] / last["vol_ma20"]) if last["vol_ma20"] and not math.isnan(last["vol_ma20"]) else 0
-    if vol_ratio >= 1.5:
-        score += 10
-        notes.append("intra vol spike")
-
-    return {
-        "score": score,
-        "vol_ratio": vol_ratio,
-        "notes": ", ".join(notes),
-    }
-
-
-def probability_label(score: int) -> str:
-    if score >= 80:
-        return "A+"
-    if score >= 65:
-        return "A"
-    if score >= 50:
-        return "B"
-    return "C"
-
-
-def decide_signal(daily: pd.DataFrame, intra: pd.DataFrame, total_score: int) -> str:
-    d = daily.iloc[-1]
-    i = intra.iloc[-1]
-
-    day_trade = (
-        d["Close"] > d["ema20"] and
-        d["ema20"] > d["ema50"] and
-        i["Close"] > i["ema20"] and
-        55 <= i["rsi14"] <= 75 and
-        total_score >= 55
-    )
-
-    swing = (
-        d["ema20"] > d["ema50"] and
-        45 <= d["rsi14"] <= 68 and
-        abs(d["Close"] - d["ema20"]) / max(d["Close"], 1e-9) <= 0.04 and
-        total_score >= 50
-    )
-
-    if day_trade and swing:
-        return "DAY+SWING"
-    if day_trade:
-        return "DAY TRADE"
-    if swing:
-        return "SWING"
+    if breakout and intraday_ok:
+        return "BREAKOUT"
+    if rebound and intraday_ok:
+        return "ON TRACK"
+    if pullback and d["rsi14"] >= 45:
+        return "AKUM"
+    if d["rsi14"] > 72:
+        return "WASPADA OB"
+    if d["Close"] < d["ema20"] and d["rsi14"] < 45:
+        return "DIST A"
     return "WAIT"
 
 
-def build_result(symbol: str, daily: pd.DataFrame, intra: pd.DataFrame) -> Optional[ScreenResult]:
-    dlast = daily.iloc[-1]
-    ilast = intra.iloc[-1]
+def action_label(signal: str, i: pd.Series) -> str:
+    if signal in {"BREAKOUT", "ON TRACK", "AKUM"}:
+        return "AT ENTRY" if i["Close"] >= i["ema20"] else "WAIT GC"
+    if signal == "WASPADA OB":
+        return "HOLD"
+    return "WAIT"
 
-    if float(dlast["Close"]) > MAX_PRICE:
+
+def probability_score(d: pd.Series, i: pd.Series) -> int:
+    score = 0
+    if d["Close"] <= MAX_PRICE:
+        score += 10
+    if d["ema20"] > d["ema50"]:
+        score += 15
+    if d["Close"] > d["ema20"]:
+        score += 10
+    if d["Close"] > d["high20"]:
+        score += 20
+    if 50 <= d["rsi14"] <= 70:
+        score += 10
+    if d["Volume"] > 1.5 * d["vol_ma20"]:
+        score += 15
+    if i["ema20"] > i["ema50"]:
+        score += 10
+    if i["Close"] > i["ema20"]:
+        score += 5
+    if 55 <= i["rsi14"] <= 75:
+        score += 5
+    return int(score)
+
+
+def rvol_percent(d: pd.Series) -> float:
+    if d["vol_ma20"] and not math.isnan(d["vol_ma20"]):
+        return round(float(d["Volume"] / d["vol_ma20"] * 100), 0)
+    return 0.0
+
+
+def tp_sl(last: pd.Series) -> tuple[float, float, float]:
+    entry = float(last["Close"])
+    atr_value = float(last["atr14"]) if not math.isnan(last["atr14"]) else entry * 0.03
+    tp = entry + 2.0 * atr_value
+    sl = max(entry - 1.2 * atr_value, entry * 0.94)
+    return round(entry, 2), round(tp, 2), round(sl, 2)
+
+
+def normalize_symbol(symbol: str) -> str:
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return ""
+    return symbol if symbol.endswith(".JK") else f"{symbol}.JK"
+
+
+def search_emitens(query: str, symbols: List[str]) -> List[str]:
+    query = query.strip().upper()
+    if not query:
+        return symbols
+    matched = []
+    for symbol in symbols:
+        base = symbol.replace(".JK", "")
+        if query in base:
+            matched.append(symbol)
+    return matched
+
+
+def row_from_symbol(symbol: str) -> Optional[dict]:
+    daily_raw = load_data(symbol, DAILY_PERIOD, DAILY_INTERVAL)
+    intra_raw = load_data(symbol, INTRADAY_PERIOD, INTRADAY_INTERVAL)
+    if daily_raw is None or intra_raw is None:
+        return None
+    if len(daily_raw) < 80 or len(intra_raw) < 60:
         return None
 
-    daily_score = score_daily(daily)
-    intra_score = score_intraday(intra)
-    total_score = int(daily_score["score"] + intra_score["score"])
+    daily = prepare(daily_raw)
+    intra = prepare(intra_raw)
+    d = daily.iloc[-1]
+    i = intra.iloc[-1]
+    prev = daily.iloc[-2]
 
-    signal = decide_signal(daily, intra, total_score)
-    action = "AT ENTRY" if signal != "WAIT" else "WAIT"
+    price = float(d["Close"])
+    if price > MAX_PRICE:
+        return None
 
-    current_price = float(dlast["Close"])
-    current_atr = float(dlast["atr14"]) if not math.isnan(dlast["atr14"]) else current_price * 0.03
+    signal = signal_label(d, i)
+    action = action_label(signal, i)
+    entry, tp, sl = tp_sl(d)
+    score = probability_score(d, i)
+    gain = ((price / float(prev["Close"])) - 1) * 100
+    profit_pct = ((tp / entry) - 1) * 100 if entry else 0
+    trend = trend_label(d)
+    phase = phase_label(d)
+    rsi_sig = "UP" if d["rsi14"] >= 50 else "DEAD"
 
-    entry = current_price
-    sl = max(current_price - 1.5 * current_atr, current_price * 0.94)
-    tp1 = current_price + 1.5 * current_atr
-    tp2 = current_price + 3.0 * current_atr
-    profit_pct_tp1 = ((tp1 / entry) - 1) * 100
-
-    return ScreenResult(
-        symbol=symbol,
-        price=round(current_price, 2),
-        gain_pct=round(float(daily_score["gain_pct"]), 2),
-        signal=signal,
-        action=action,
-        score=total_score,
-        probability=probability_label(total_score),
-        entry=round(entry, 2),
-        tp1=round(tp1, 2),
-        tp2=round(tp2, 2),
-        sl=round(sl, 2),
-        profit_pct_tp1=round(profit_pct_tp1, 2),
-        rsi_daily=round(float(dlast["rsi14"]), 1),
-        rsi_intraday=round(float(ilast["rsi14"]), 1),
-        vol_ratio=round(max(float(daily_score["vol_ratio"]), float(intra_score["vol_ratio"])), 2),
-        value_trade=round(float(daily_score["avg_value"]), 0),
-        phase=classify_phase(dlast),
-        trend=classify_trend(dlast),
-        note=f"D: {daily_score['notes']} | I: {intra_score['notes']}",
-    )
+    return {
+        "EMITEN": symbol.replace(".JK", ""),
+        "GAIN": round(gain, 1),
+        "WICK": round(float(d["wick_pct"]), 1),
+        "AKSI": action,
+        "SINYAL": signal,
+        "RVOL": rvol_percent(d),
+        "ENTRY": entry,
+        "NOW": round(price, 2),
+        "TP": tp,
+        "SL": sl,
+        "PROFIT": round(((price / entry) - 1) * 100 if entry else 0, 1),
+        "%TO TP": round(profit_pct, 1),
+        "RSI SIG": rsi_sig,
+        "RSI 5M": round(float(i["rsi14"]), 1),
+        "VAL": round(float(d["value_ma20"]) / 1_000_000, 1) if not math.isnan(d["value_ma20"]) else 0,
+        "FASE": phase,
+        "TREND": trend,
+        "SCORE": score,
+    }
 
 
-# =========================
-# OUTPUT TABLE
-# =========================
-def screen_symbols(symbols: List[str]) -> pd.DataFrame:
+def build_single_table(symbols: List[str]) -> pd.DataFrame:
     rows = []
+    seen = set()
     for symbol in symbols:
-        daily_raw = load_data(symbol, DAILY_PERIOD, DAILY_INTERVAL)
-        intra_raw = load_data(symbol, INTRADAY_PERIOD, INTRADAY_INTERVAL)
-        if daily_raw is None or intra_raw is None:
+        symbol = normalize_symbol(symbol)
+        if not symbol or symbol in seen:
             continue
-        if len(daily_raw) < 60 or len(intra_raw) < 60:
-            continue
-
-        daily = prepare_indicators(daily_raw)
-        intra = prepare_indicators(intra_raw)
-        result = build_result(symbol, daily, intra)
-        if result is None:
-            continue
-        rows.append(result.__dict__)
+        seen.add(symbol)
+        row = row_from_symbol(symbol)
+        if row:
+            rows.append(row)
 
     if not rows:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    df = df.sort_values(by=["score", "gain_pct"], ascending=[False, False]).reset_index(drop=True)
+    df = df.sort_values(by=["SCORE", "RVOL", "GAIN"], ascending=[False, False, False]).reset_index(drop=True)
     return df
 
 
-def format_terminal_table(df: pd.DataFrame) -> str:
+# =====================================================
+# DISPLAY
+# =====================================================
+def print_table(df: pd.DataFrame) -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+    print(f"BSJP SCREENER | harga <= {MAX_PRICE} | auto refresh {REFRESH_SECONDS} detik")
+    print(time.strftime("Update terakhir: %Y-%m-%d %H:%M:%S"))
+    print("=" * 120)
+
     if df.empty:
-        return "Tidak ada kandidat yang lolos filter."
-
-    show = df[[
-        "symbol", "gain_pct", "action", "signal", "score", "probability",
-        "entry", "tp1", "sl", "profit_pct_tp1", "rsi_daily", "rsi_intraday",
-        "vol_ratio", "phase", "trend"
-    ]].copy()
-
-    show.columns = [
-        "EMITEN", "GAIN%", "AKSI", "SINYAL", "SCORE", "HP",
-        "ENTRY", "TP", "SL", "%TP", "RSI D", "RSI I",
-        "VOL", "FASE", "TREND"
-    ]
-    return show.to_string(index=False)
-
-
-def format_telegram_message(df: pd.DataFrame, top_n: int = 10) -> str:
-    if df.empty:
-        return "📭 Tidak ada kandidat high probability saat ini."
-
-    lines = ["📊 HIGH PROBABILITY SCREENER"]
-    lines.append(f"Filter harga ≤ {MAX_PRICE}")
-    lines.append("")
-
-    for _, row in df.head(top_n).iterrows():
-        lines.append(
-            f"{row['symbol']} | {row['signal']} | Score {row['score']} ({row['probability']})\n"
-            f"Price {row['price']} | Gain {row['gain_pct']}% | Trend {row['trend']}\n"
-            f"Entry {row['entry']} | TP1 {row['tp1']} | SL {row['sl']}\n"
-            f"RSI D/I {row['rsi_daily']}/{row['rsi_intraday']} | Vol x{row['vol_ratio']} | {row['phase']}"
-        )
-        lines.append("-" * 28)
-
-    msg = "\n".join(lines)
-    return msg[:4000]
-
-
-# =========================
-# TELEGRAM
-# =========================
-async def send_telegram(message: str) -> None:
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram token/chat id belum di-set.")
+        print("Tidak ada emiten yang lolos filter.")
         return
-    bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+
+    cols = [
+        "EMITEN", "GAIN", "WICK", "AKSI", "SINYAL", "RVOL",
+        "ENTRY", "NOW", "TP", "SL", "PROFIT", "%TO TP",
+        "RSI SIG", "RSI 5M", "VAL", "FASE", "TREND"
+    ]
+    print(df[cols].to_string(index=False))
 
 
-# =========================
-# MAIN
-# =========================
-def main() -> None:
-    df = screen_symbols(WATCHLIST)
-    print(format_terminal_table(df))
+# =====================================================
+# TELEGRAM
+# =====================================================
+class TelegramSender:
+    def __init__(self, token: str, chat_id: str):
+        self.token = token
+        self.chat_id = chat_id
 
+    async def send_message(self, message: str):
+        bot = Bot(token=self.token)
+        await bot.send_message(chat_id=self.chat_id, text=message)
+
+    def send(self, message: str):
+        asyncio.run(self.send_message(message))
+
+
+def format_telegram(df: pd.DataFrame) -> str:
+    if df.empty:
+        return f"📭 Tidak ada kandidat BSJP dengan harga <= {MAX_PRICE}"
+
+    lines = [f"📊 BSJP SCREENER | Harga <= {MAX_PRICE}", ""]
+    for _, row in df.head(TOP_N_TELEGRAM).iterrows():
+        lines.append(
+            f"{row['EMITEN']} | {row['SINYAL']} | {row['AKSI']}
+"
+            f"Now {row['NOW']} | Entry {row['ENTRY']} | TP {row['TP']} | SL {row['SL']}
+"
+            f"Gain {row['GAIN']}% | RVOL {row['RVOL']}% | RSI5M {row['RSI 5M']} | {row['TREND']}"
+        )
+        lines.append("-" * 26)
+    return "
+".join(lines)[:4000]
+
+
+# =====================================================
+# INTERACTIVE + AUTO REFRESH
+# =====================================================
+def resolve_symbols_from_input(user_input: str) -> List[str]:
+    user_input = user_input.strip()
+    if not user_input or user_input.lower() == "all":
+        return WATCHLIST
+
+    if "," in user_input:
+        return [normalize_symbol(x) for x in user_input.split(",") if normalize_symbol(x)]
+
+    matches = search_emitens(user_input, WATCHLIST)
+    if matches:
+        return matches
+
+    single = normalize_symbol(user_input)
+    return [single] if single else WATCHLIST
+
+
+def run_once(symbols: List[str], send_telegram: bool = False) -> pd.DataFrame:
+    df = build_single_table(symbols)
+    print_table(df)
     if not df.empty:
-        df.to_csv("screener_output.csv", index=False)
-        msg = format_telegram_message(df, top_n=8)
-        asyncio.run(send_telegram(msg))
+        df.to_csv(EXPORT_CSV, index=False)
+    if send_telegram and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        TelegramSender(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID).send(format_telegram(df))
+    return df
+
+
+def auto_refresh_loop(symbols: List[str], send_telegram: bool = False) -> None:
+    while True:
+        try:
+            run_once(symbols, send_telegram=send_telegram)
+        except KeyboardInterrupt:
+            print("
+Auto refresh dihentikan.")
+            break
+        except Exception as exc:
+            print(f"Error: {exc}")
+        time.sleep(REFRESH_SECONDS)
+
+
+def main() -> None:
+    print("=== BSJP Screener ===")
+    print("Ketik 'all' untuk semua watchlist")
+    print("Ketik kode saham, contoh: GOTO")
+    print("Ketik beberapa kode dengan koma, contoh: GOTO,BUKA,BRIS")
+    print("Ketik sebagian nama untuk search, contoh: GO")
+    print("")
+
+    user_input = input("Cari emiten: ").strip()
+    symbols = resolve_symbols_from_input(user_input)
+
+    if not symbols:
+        print("Emiten tidak ditemukan.")
+        return
+
+    print(f"Memantau: {', '.join([s.replace('.JK', '') for s in symbols])}")
+    choice = input("Aktifkan auto refresh 60 detik? (y/n): ").strip().lower()
+    telegram_choice = input("Kirim juga ke Telegram tiap refresh? (y/n): ").strip().lower()
+
+    send_telegram = telegram_choice == "y"
+
+    if choice == "y":
+        auto_refresh_loop(symbols, send_telegram=send_telegram)
+    else:
+        run_once(symbols, send_telegram=send_telegram)
 
 
 if __name__ == "__main__":
