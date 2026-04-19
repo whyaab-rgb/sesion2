@@ -401,33 +401,62 @@
     }
 
     async function fetchMarketData() {
-      // DEMO generator. Ganti isi fungsi ini dengan fetch API real-time Anda.
-      const tickers = [...new Set(STOCK_POOL)].slice(0, 90);
-      return tickers.map(ticker => {
-        const now = rand(50, 1000, 0);
-        const gain1 = rand(-4.8, 8.8, 1);
-        const wick = rand(0, 6.5, 1);
-        const rvol = rand(15, 380, 0);
-        const action = pick(['AT ENTRY', 'WATCH GC', 'HOLD', 'SIAP BELI', 'LATE']);
-        const signal = pick(['ON TRACK', 'DIST', 'REBOUND', 'AKUM', 'WAIT', 'SUPER', 'HAKA']);
-        const tp = Math.round(now * (1 + rand(0.01, 0.12, 3)));
-        const sl = Math.round(now * (1 - rand(0.01, 0.08, 3)));
-        const profit = Number((((now - rand(sl, now, 0)) / now) * 100).toFixed(1));
-        const toTp = Number((((tp - now) / now) * 100).toFixed(1));
-        const rsi5m = rand(28, 81, 1);
-        const rsiSig = rsi5m >= 70 ? 'UP' : rsi5m <= 45 ? 'DEAD' : 'UP';
-        const value = Math.round(rand(2_500_000, 980_000_000, 0));
-        const phase = pick(['AKUM', 'BIG AKUM', 'NETRAL', 'BIG DIST']);
-        const trend = gain1 >= 0 ? 'BULL' : 'BEAR';
+      const API_URL = 'https://api-anda.com/bsjp'; // ganti ke endpoint API Anda
+      const API_HEADERS = {
+        'Content-Type': 'application/json'
+        // 'Authorization': 'Bearer TOKEN_ANDA',
+        // 'x-api-key': 'API_KEY_ANDA'
+      };
+
+      const res = await fetch(API_URL, {
+        method: 'GET',
+        headers: API_HEADERS,
+        cache: 'no-store'
+      });
+
+      if (!res.ok) {
+        throw new Error(`Gagal fetch API: ${res.status} ${res.statusText}`);
+      }
+
+      const json = await res.json();
+      const sourceRows = Array.isArray(json)
+        ? json
+        : Array.isArray(json.data)
+          ? json.data
+          : Array.isArray(json.results)
+            ? json.results
+            : Array.isArray(json.items)
+              ? json.items
+              : [];
+
+      return sourceRows.map(item => {
+        const now = Number(
+          item.now ?? item.price ?? item.harga ?? item.last ?? item.close ?? 0
+        );
+        const entry = Number(item.entry ?? item.buy_price ?? item.entryPrice ?? now);
+        const tp = Number(item.tp ?? item.take_profit ?? item.target ?? Math.round(now * 1.04));
+        const sl = Number(item.sl ?? item.stop_loss ?? item.cutloss ?? Math.round(now * 0.96));
+        const gain1 = Number(item.gain1 ?? item.gain ?? item.change_pct ?? item.changePercent ?? 0);
+        const wick = Number(item.wick ?? item.upper_wick ?? item.wick_pct ?? 0);
+        const rvol = Number(item.rvol ?? item.relative_volume ?? item.rvol_pct ?? 0);
+        const profit = Number(item.profit ?? (((now - entry) / (entry || 1)) * 100));
+        const toTp = Number(item.toTp ?? item.to_tp ?? item.percent_to_tp ?? (((tp - now) / (now || 1)) * 100));
+        const rsi5m = Number(item.rsi5m ?? item.rsi_5m ?? item.rsi ?? 0);
+
+        const action = String(item.action ?? item.aksi ?? item.recommendation ?? 'WATCH GC').toUpperCase();
+        const signal = String(item.signal ?? item.sinyal ?? item.status ?? 'WAIT').toUpperCase();
+        const rsiSig = String(item.rsiSig ?? item.rsi_signal ?? (rsi5m >= 50 ? 'UP' : 'DEAD')).toUpperCase();
+        const phase = String(item.phase ?? item.fase ?? item.market_phase ?? 'NETRAL').toUpperCase();
+        const trend = String(item.trend ?? item.direction ?? (gain1 >= 0 ? 'BULL' : 'BEAR')).toUpperCase();
 
         return {
-          ticker,
+          ticker: String(item.ticker ?? item.symbol ?? item.kode ?? item.emiten ?? '').toUpperCase(),
           gain1,
           wick,
           action,
           signal,
           rvol,
-          entry: now,
+          entry,
           now,
           tp,
           sl,
@@ -435,11 +464,11 @@
           toTp,
           rsiSig,
           rsi5m,
-          value,
+          value: Number(item.value ?? item.val ?? item.volume_value ?? item.turnover ?? 0),
           phase,
           trend
         };
-      });
+      }).filter(item => item.ticker && Number.isFinite(item.now));
     }
 
     function getFilteredSortedData(data) {
@@ -549,8 +578,20 @@
     refreshBtn.addEventListener('click', refreshData);
 
     (async function init() {
-      await refreshData();
-      startAutoRefresh();
+      try {
+        await refreshData();
+        startAutoRefresh();
+      } catch (err) {
+        console.error(err);
+        document.getElementById('lastUpdate').textContent = 'API error';
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="17" style="text-align:left;padding:16px;color:#ffb2bc;">
+              Gagal mengambil data API. Periksa URL endpoint, header auth, CORS, dan format response API Anda.
+            </td>
+          </tr>
+        `;
+      }
     })();
   </script>
 </body>
