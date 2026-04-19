@@ -39,7 +39,6 @@ WATCHLISTS = {
     ],
     "Custom": []
 }
-}
 
 MAX_PRICE = 1000
 
