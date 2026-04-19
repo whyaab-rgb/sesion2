@@ -32,8 +32,6 @@ INTRADAY_INTERVAL = "1h"
 TOP_N_TELEGRAM = 20
 REFRESH_SECONDS = 60
 EXPORT_CSV = "bsjp_screener_single_table.csv"
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 # =====================================================
@@ -289,25 +287,7 @@ def print_table(df: pd.DataFrame) -> None:
     print(df[cols].to_string(index=False))
 
 
-# =====================================================
-# TELEGRAM
-# =====================================================
-class TelegramSender:
-    def __init__(self, token: str, chat_id: str):
-        self.token = token
-        self.chat_id = chat_id
 
-    async def send_message(self, message: str):
-        bot = Bot(token=self.token)
-        await bot.send_message(chat_id=self.chat_id, text=message)
-
-    def send(self, message: str):
-        asyncio.run(self.send_message(message))
-
-
-def format_telegram(df: pd.DataFrame) -> str:
-    if df.empty:
-        return f"📭 Tidak ada kandidat BSJP dengan harga <= {MAX_PRICE}"
 
     lines = [f"📊 BSJP SCREENER | Harga <= {MAX_PRICE}", ""]
     for _, row in df.head(TOP_N_TELEGRAM).iterrows():
@@ -347,9 +327,7 @@ def run_once(symbols: List[str], send_telegram: bool = False) -> pd.DataFrame:
     print_table(df)
     if not df.empty:
         df.to_csv(EXPORT_CSV, index=False)
-    if send_telegram and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        TelegramSender(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID).send(format_telegram(df))
-    return df
+
 
 
 def auto_refresh_loop(symbols: List[str], send_telegram: bool = False) -> None:
@@ -382,9 +360,7 @@ def main() -> None:
 
     print(f"Memantau: {', '.join([s.replace('.JK', '') for s in symbols])}")
     choice = input("Aktifkan auto refresh 60 detik? (y/n): ").strip().lower()
-    telegram_choice = input("Kirim juga ke Telegram tiap refresh? (y/n): ").strip().lower()
-
-    send_telegram = telegram_choice == "y"
+    
 
     if choice == "y":
         auto_refresh_loop(symbols, send_telegram=send_telegram)
