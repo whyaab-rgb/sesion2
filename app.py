@@ -1,5 +1,7 @@
 import time
 import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 import numpy as np
 import pandas as pd
@@ -9,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="High Prob Screener IDX", layout="wide")
+st.set_page_config(page_title="High Prob Screener IDX Pro", layout="wide")
 
 # =========================================================
 # STYLE
@@ -54,11 +56,13 @@ def normalize_jk_symbol(symbol: str) -> str:
         s = f"{s}.JK"
     return s
 
+
 def latest(series: pd.Series) -> float:
     try:
         return float(series.iloc[-1])
     except Exception:
         return np.nan
+
 
 def fmt_price(v):
     if pd.isna(v):
@@ -67,15 +71,18 @@ def fmt_price(v):
         return f"{v:,.0f}"
     return f"{v:,.2f}"
 
+
 def fmt_pct(v):
     if pd.isna(v):
         return "-"
     return f"{v:.1f}%"
 
+
 def rsi_cell_text(v):
     if pd.isna(v):
         return "-"
     return f"{v:.1f}"
+
 
 def human_value(v):
     if pd.isna(v):
@@ -88,60 +95,59 @@ def human_value(v):
         return f"{v / 1_000_000:.1f}M"
     return f"{v:,.0f}"
 
+
+def safe_ratio(a, b, default=np.nan):
+    if pd.isna(a) or pd.isna(b) or b == 0:
+        return default
+    return a / b
+
+
 # =========================================================
 # IDX UNIVERSE
 # =========================================================
 @st.cache_data(ttl=86400)
 def get_all_idx_symbols():
-    """
-    Ambil semua kode saham dari halaman resmi IDX stock list.
-    Fallback: parse halaman Indonesia jika perlu.
-    """
     urls = [
         "https://www.idx.co.id/en/market-data/stocks-data/stock-list",
         "https://www.idx.co.id/id/data-pasar/data-saham/daftar-saham/"
     ]
 
-    symbols = set()
     headers = {"User-Agent": "Mozilla/5.0"}
+    symbols = set()
 
     for url in urls:
         try:
-            r = requests.get(url, headers=headers, timeout=20)
-            r.raise_for_status()
-            html = r.text
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            html = response.text
 
-            # Parse semua tabel
-            tables = pd.read_html(html)
-            for tbl in tables:
-                for col in tbl.columns:
-                    col_str = str(col).lower()
-                    if "code" in col_str or "kode" in col_str:
-                        vals = tbl[col].astype(str).str.strip().str.upper().tolist()
-                        for v in vals:
-                            if 1 <= len(v) <= 5 and v.isalnum():
-                                symbols.add(f"{v}.JK")
+            try:
+                tables = pd.read_html(html)
+                for table in tables:
+                    for col in table.columns:
+                        name = str(col).lower()
+                        if "code" in name or "kode" in name:
+                            vals = table[col].astype(str).str.strip().str.upper().tolist()
+                            for v in vals:
+                                if 1 <= len(v) <= 5 and v.isalnum():
+                                    symbols.add(f"{v}.JK")
+            except Exception:
+                pass
 
-            # Fallback regex-like via BeautifulSoup text scan
             if not symbols:
                 soup = BeautifulSoup(html, "lxml")
-                text = soup.get_text(" ", strip=True).upper().split()
-                for token in text:
-                    token = token.strip(",.;:()[]")
-                    if 1 <= len(token) <= 5 and token.isalnum():
-                        # hindari kata umum
-                        if token not in {
-                            "CODE", "KODE", "DATE", "LIST", "STOCK", "SAHAM",
-                            "IDX", "BEI", "IPO", "LOT", "BOARD"
-                        }:
-                            symbols.add(f"{token}.JK")
+                tokens = soup.get_text(" ", strip=True).upper().split()
+                banned = {"CODE", "KODE", "IDX", "BEI", "IPO", "LIST", "STOCK", "SAHAM", "BOARD", "DATE"}
+                for token in tokens:
+                    token = token.strip(",.;:()[]{}")
+                    if 1 <= len(token) <= 5 and token.isalnum() and token not in banned:
+                        symbols.add(f"{token}.JK")
 
             if symbols:
                 break
         except Exception:
             continue
 
-    # Rapikan hasil tidak wajar
     clean = []
     for s in sorted(symbols):
         base = s.replace(".JK", "")
@@ -149,6 +155,7 @@ def get_all_idx_symbols():
             clean.append(s)
 
     return clean
+
 
 # =========================================================
 # DATA SOURCE
@@ -161,7 +168,7 @@ def get_ohlcv(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.Data
         interval=interval,
         auto_adjust=False,
         progress=False,
-        threads=False
+        threads=False,
     )
 
     if isinstance(df.columns, pd.MultiIndex):
@@ -177,6 +184,7 @@ def get_ohlcv(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.Data
 
     return df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
 
+
 @st.cache_data(ttl=300)
 def get_intraday_5m(symbol: str) -> pd.DataFrame:
     try:
@@ -186,7 +194,7 @@ def get_intraday_5m(symbol: str) -> pd.DataFrame:
             interval="5m",
             auto_adjust=False,
             progress=False,
-            threads=False
+            threads=False,
         )
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -195,6 +203,7 @@ def get_intraday_5m(symbol: str) -> pd.DataFrame:
         return df.dropna().copy()
     except Exception:
         return pd.DataFrame()
+
 
 # =========================================================
 # INDICATORS
@@ -253,10 +262,14 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     x["LOWER_WICK"] = lower_wick.clip(lower=0)
     x["WICK_PCT"] = ((x["UPPER_WICK"] + x["LOWER_WICK"]) / candle_range) * 100
 
+    x["VALUE"] = x["Close"] * x["Volume"]
+    x["AVG_VALUE20"] = x["VALUE"].rolling(20).mean()
+
     return x
 
+
 # =========================================================
-# SIGNAL ENGINE
+# LOGIC
 # =========================================================
 def get_phase(df: pd.DataFrame) -> str:
     recent = df.tail(10)
@@ -280,6 +293,7 @@ def get_phase(df: pd.DataFrame) -> str:
         return "DIST"
     return "NEUTRAL"
 
+
 def get_trend(close_, ma20, ma50) -> str:
     if pd.isna(close_) or pd.isna(ma20) or pd.isna(ma50):
         return "NEUTRAL"
@@ -288,6 +302,7 @@ def get_trend(close_, ma20, ma50) -> str:
     if close_ < ma20 < ma50:
         return "BEAR"
     return "NEUTRAL"
+
 
 def get_rsi_signal(rsi, macd, macd_signal) -> str:
     if pd.isna(rsi) or pd.isna(macd) or pd.isna(macd_signal):
@@ -299,6 +314,7 @@ def get_rsi_signal(rsi, macd, macd_signal) -> str:
     if rsi <= 42 and macd < macd_signal:
         return "DEAD"
     return "UP" if rsi >= 50 else "DEAD"
+
 
 def get_signal_label(close_, ma20, ma50, ema9, rsi, macd, macd_signal, vol, vol_ma20, support, resistance, wick):
     if any(pd.isna(v) for v in [close_, ma20, ema9, rsi, macd, macd_signal]):
@@ -328,6 +344,7 @@ def get_signal_label(close_, ma20, ma50, ema9, rsi, macd, macd_signal, vol, vol_
         return "GC NOW"
     return "WAIT"
 
+
 def get_action_label(signal_label, close_, entry, trend):
     if signal_label in ["ON TRACK", "AKUM", "HAKA", "GC NOW", "REBOUND"]:
         if not pd.isna(entry) and close_ <= entry * 1.02:
@@ -340,6 +357,7 @@ def get_action_label(signal_label, close_, entry, trend):
     if trend == "BULL":
         return "HOLD"
     return "WAIT GC"
+
 
 def compute_scores(df: pd.DataFrame):
     close_ = latest(df["Close"])
@@ -356,6 +374,23 @@ def compute_scores(df: pd.DataFrame):
     resistance = latest(df["RESIST20"])
     bb_lower = latest(df["BB_LOWER"])
     wick = latest(df["WICK_PCT"])
+    atr = latest(df["ATR14"])
+    avg_value20 = latest(df["AVG_VALUE20"])
+
+    risk_reward_bonus = 0
+    if not pd.isna(atr) and atr > 0 and not pd.isna(close_):
+        tp = close_ + 2 * atr
+        sl = close_ - atr
+        rr = safe_ratio(tp - close_, close_ - sl, default=0)
+        if rr >= 1.8:
+            risk_reward_bonus = 1
+
+    liquidity_bonus = 0
+    if not pd.isna(avg_value20):
+        if avg_value20 >= 10_000_000_000:
+            liquidity_bonus = 2
+        elif avg_value20 >= 3_000_000_000:
+            liquidity_bonus = 1
 
     scalping = 0
     if close_ > ema9 > ma20:
@@ -370,6 +405,8 @@ def compute_scores(df: pd.DataFrame):
         scalping += 1
     if wick < 35:
         scalping += 1
+    scalping += risk_reward_bonus
+    scalping += liquidity_bonus
 
     bsjp = 0
     if rsi < 35:
@@ -384,6 +421,7 @@ def compute_scores(df: pd.DataFrame):
         bsjp += 1
     if df["MACD_HIST"].iloc[-1] > 0:
         bsjp += 2
+    bsjp += liquidity_bonus
 
     swing = 0
     if close_ > ma20 > ma50:
@@ -396,6 +434,8 @@ def compute_scores(df: pd.DataFrame):
         swing += 1
     if close_ < resistance * 0.93 and close_ > support * 1.08:
         swing += 1
+    swing += risk_reward_bonus
+    swing += liquidity_bonus
 
     bandar = 0
     phase = get_phase(df)
@@ -411,6 +451,7 @@ def compute_scores(df: pd.DataFrame):
         bandar += 2
     if close_ > ma20:
         bandar += 1
+    bandar += liquidity_bonus
 
     return {
         "scalping": scalping,
@@ -418,6 +459,7 @@ def compute_scores(df: pd.DataFrame):
         "swing": swing,
         "bandar": bandar
     }
+
 
 def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
     df = calc_indicators(daily_df)
@@ -440,7 +482,10 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
     resistance = latest(df["RESIST20"])
     atr = latest(df["ATR14"])
 
-    rvol = (vol / vol_ma20 * 100) if not pd.isna(vol_ma20) and vol_ma20 > 0 else np.nan
+    rvol = safe_ratio(vol, vol_ma20, default=np.nan)
+    if not pd.isna(rvol):
+        rvol = rvol * 100
+
     entry = round((support + ma20) / 2) if not pd.isna(support) and not pd.isna(ma20) else close_
     now_price = close_
     tp = round(close_ + (atr * 2)) if not pd.isna(atr) else round(close_ * 1.04)
@@ -490,8 +535,9 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
         "daily_df": df
     }
 
+
 # =========================================================
-# PRE-FILTER + SCAN
+# FILTER + SCAN
 # =========================================================
 def passes_prefilter(daily_df: pd.DataFrame, min_price=50, min_avg_vol=100_000, min_value=1_000_000_000):
     if daily_df.empty or len(daily_df) < 25:
@@ -505,114 +551,213 @@ def passes_prefilter(daily_df: pd.DataFrame, min_price=50, min_avg_vol=100_000, 
         return False
 
     return (
-        close_ >= min_price and
-        avg_vol20 >= min_avg_vol and
-        avg_value20 >= min_value
+        close_ >= min_price
+        and avg_vol20 >= min_avg_vol
+        and avg_value20 >= min_value
     )
 
-@st.cache_data(ttl=300)
-def run_screener(symbols, period, interval, min_price, min_avg_vol, min_value, limit_scan=None):
+
+def sort_by_strategy(df: pd.DataFrame, strategy_mode: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    if strategy_mode == "Scalping":
+        return df.sort_values(["score_scalping", "score_total", "rvol"], ascending=False).reset_index(drop=True)
+    if strategy_mode == "BSJP":
+        return df.sort_values(["score_bsjp", "score_total", "rsi_5m"], ascending=[False, False, True]).reset_index(drop=True)
+    if strategy_mode == "Swing":
+        return df.sort_values(["score_swing", "score_bandar", "score_total"], ascending=False).reset_index(drop=True)
+
+    return df.sort_values(["score_total", "score_scalping", "score_swing"], ascending=False).reset_index(drop=True)
+
+
+def run_screener_pro(symbols, period, interval, min_price, min_avg_vol, min_value, limit_scan=200, max_workers=10):
     rows = []
     scanned = 0
     passed_prefilter = 0
 
-    for symbol in symbols:
-        if limit_scan and scanned >= limit_scan:
-            break
+    progress = st.progress(0)
+    status = st.empty()
 
+    symbols = symbols[:limit_scan]
+
+    def process_symbol(symbol):
         try:
             daily = get_ohlcv(symbol, period=period, interval=interval)
-            scanned += 1
-
             if daily.empty:
-                continue
+                return None, False
 
-            if not passes_prefilter(daily, min_price=min_price, min_avg_vol=min_avg_vol, min_value=min_value):
-                continue
+            if not passes_prefilter(daily, min_price, min_avg_vol, min_value):
+                return None, False
 
-            passed_prefilter += 1
-            intra5 = get_intraday_5m(symbol)
-            row = build_row(symbol, daily, intra5)
+            intra = get_intraday_5m(symbol)
+            row = build_row(symbol, daily, intra)
+            return row, True
+        except Exception:
+            return None, False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_symbol, symbol) for symbol in symbols]
+
+        total_jobs = len(futures)
+        for i, future in enumerate(as_completed(futures), start=1):
+            row, passed = future.result()
+            scanned += 1
+            if passed:
+                passed_prefilter += 1
             if row is not None:
                 rows.append(row)
-        except Exception:
-            continue
 
-    result = pd.DataFrame(rows).sort_values("score_total", ascending=False).reset_index(drop=True) if rows else pd.DataFrame()
+            progress.progress(i / total_jobs)
+            status.text(f"Scanning {i}/{total_jobs} emiten...")
+
+    progress.empty()
+    status.empty()
+
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values("score_total", ascending=False).reset_index(drop=True)
+
     return result, scanned, passed_prefilter
+
+
+# =========================================================
+# COLORS
+# =========================================================
+def bg_gain(v):
+    if pd.isna(v):
+        return "#243244"
+    if v > 3:
+        return "#10b981"
+    if v > 0:
+        return "#15803d"
+    if v > -2:
+        return "#dc2626"
+    return "#991b1b"
+
+
+def bg_wick(v):
+    if pd.isna(v):
+        return "#243244"
+    if v < 1:
+        return "#0f766e"
+    if v < 2.5:
+        return "#2563eb"
+    if v < 4:
+        return "#d97706"
+    return "#dc2626"
+
+
+def bg_aksi(v):
+    return {
+        "AT ENTRY": "#1d4ed8",
+        "WATCH": "#b45309",
+        "WAIT GC": "#374151",
+        "HOLD": "#2563eb",
+        "SIAP BELI": "#7c3aed",
+        "WASPADA OB": "#d97706"
+    }.get(v, "#334155")
+
+
+def bg_sinyal(v):
+    return {
+        "ON TRACK": "#16a34a",
+        "REBOUND": "#d97706",
+        "AKUM": "#15803d",
+        "DIST": "#b91c1c",
+        "SUPER": "#7e22ce",
+        "HAKA": "#14b8a6",
+        "GC NOW": "#9333ea",
+        "WASPADA OB": "#ea580c",
+        "WAIT": "#111827"
+    }.get(v, "#334155")
+
+
+def bg_rvol(v):
+    if pd.isna(v):
+        return "#243244"
+    if v >= 250:
+        return "#9333ea"
+    if v >= 120:
+        return "#f97316"
+    if v >= 80:
+        return "#2563eb"
+    return "#374151"
+
+
+def bg_price(kind):
+    return {
+        "entry": "#1d4ed8",
+        "now": "#2563eb",
+        "tp": "#16a34a",
+        "sl": "#b91c1c"
+    }.get(kind, "#243244")
+
+
+def bg_profit(v):
+    if pd.isna(v):
+        return "#243244"
+    if v > 2:
+        return "#16a34a"
+    if v > 0:
+        return "#0f766e"
+    if v > -2:
+        return "#92400e"
+    return "#b91c1c"
+
+
+def bg_to_tp(v):
+    if pd.isna(v):
+        return "#243244"
+    if v <= 1:
+        return "#f97316"
+    if v <= 3:
+        return "#16a34a"
+    return "#0f766e"
+
+
+def bg_rsi_sig(v):
+    return {
+        "UP": "#16a34a",
+        "DEAD": "#dc2626",
+        "GOLDEN": "#7c3aed",
+        "WAIT": "#111827"
+    }.get(v, "#334155")
+
+
+def bg_rsi(v):
+    if pd.isna(v):
+        return "#243244"
+    if v >= 70:
+        return "#f59e0b"
+    if v >= 55:
+        return "#16a34a"
+    if v >= 45:
+        return "#2563eb"
+    return "#7c3aed"
+
+
+def bg_fase(v):
+    return {
+        "BIG AKUM": "#9333ea",
+        "AKUM": "#16a34a",
+        "NEUTRAL": "#374151",
+        "DIST": "#dc2626",
+        "BIG DIST": "#991b1b"
+    }.get(v, "#334155")
+
+
+def bg_trend(v):
+    return {
+        "BULL": "#16a34a",
+        "BEAR": "#dc2626",
+        "NEUTRAL": "#6b7280"
+    }.get(v, "#334155")
+
 
 # =========================================================
 # HTML TABLE
 # =========================================================
-def bg_gain(v):
-    if pd.isna(v): return "#243244"
-    if v > 3: return "#10b981"
-    if v > 0: return "#15803d"
-    if v > -2: return "#dc2626"
-    return "#991b1b"
-
-def bg_wick(v):
-    if pd.isna(v): return "#243244"
-    if v < 1: return "#0f766e"
-    if v < 2.5: return "#2563eb"
-    if v < 4: return "#d97706"
-    return "#dc2626"
-
-def bg_aksi(v):
-    return {
-        "AT ENTRY": "#1d4ed8", "WATCH": "#b45309", "WAIT GC": "#374151",
-        "HOLD": "#2563eb", "SIAP BELI": "#7c3aed", "WASPADA OB": "#d97706"
-    }.get(v, "#334155")
-
-def bg_sinyal(v):
-    return {
-        "ON TRACK": "#16a34a", "REBOUND": "#d97706", "AKUM": "#15803d",
-        "DIST": "#b91c1c", "SUPER": "#7e22ce", "HAKA": "#14b8a6",
-        "GC NOW": "#9333ea", "WASPADA OB": "#ea580c", "WAIT": "#111827"
-    }.get(v, "#334155")
-
-def bg_rvol(v):
-    if pd.isna(v): return "#243244"
-    if v >= 250: return "#9333ea"
-    if v >= 120: return "#f97316"
-    if v >= 80: return "#2563eb"
-    return "#374151"
-
-def bg_price(kind):
-    return {"entry": "#1d4ed8", "now": "#2563eb", "tp": "#16a34a", "sl": "#b91c1c"}.get(kind, "#243244")
-
-def bg_profit(v):
-    if pd.isna(v): return "#243244"
-    if v > 2: return "#16a34a"
-    if v > 0: return "#0f766e"
-    if v > -2: return "#92400e"
-    return "#b91c1c"
-
-def bg_to_tp(v):
-    if pd.isna(v): return "#243244"
-    if v <= 1: return "#f97316"
-    if v <= 3: return "#16a34a"
-    return "#0f766e"
-
-def bg_rsi_sig(v):
-    return {"UP": "#16a34a", "DEAD": "#dc2626", "GOLDEN": "#7c3aed", "WAIT": "#111827"}.get(v, "#334155")
-
-def bg_rsi(v):
-    if pd.isna(v): return "#243244"
-    if v >= 70: return "#f59e0b"
-    if v >= 55: return "#16a34a"
-    if v >= 45: return "#2563eb"
-    return "#7c3aed"
-
-def bg_fase(v):
-    return {
-        "BIG AKUM": "#9333ea", "AKUM": "#16a34a", "NEUTRAL": "#374151",
-        "DIST": "#dc2626", "BIG DIST": "#991b1b"
-    }.get(v, "#334155")
-
-def bg_trend(v):
-    return {"BULL": "#16a34a", "BEAR": "#dc2626", "NEUTRAL": "#6b7280"}.get(v, "#334155")
-
 def make_html_table(df: pd.DataFrame, title: str, sub: str):
     html = textwrap.dedent(f"""
     <html>
@@ -646,7 +791,10 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         font-size: 10px;
         margin-bottom: 6px;
     }}
-    .table-wrap {{ width: 100%; overflow-x: auto; }}
+    .table-wrap {{
+        width: 100%;
+        overflow-x: auto;
+    }}
     .custom-table {{
         width: 100%;
         border-collapse: collapse;
@@ -686,9 +834,23 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
       <table class="custom-table">
         <thead>
           <tr>
-            <th>EMITEN</th><th>GAIN</th><th>WICK</th><th>AKSI</th><th>SINYAL</th><th>RVOL</th>
-            <th>ENTRY</th><th>NOW</th><th>TP</th><th>SL</th><th>PROFIT</th><th>%TO TP</th>
-            <th>RSI SIG</th><th>RSI 5M</th><th>VAL</th><th>FASE</th><th>TREND</th>
+            <th>EMITEN</th>
+            <th>GAIN</th>
+            <th>WICK</th>
+            <th>AKSI</th>
+            <th>SINYAL</th>
+            <th>RVOL</th>
+            <th>ENTRY</th>
+            <th>NOW</th>
+            <th>TP</th>
+            <th>SL</th>
+            <th>PROFIT</th>
+            <th>%TO TP</th>
+            <th>RSI SIG</th>
+            <th>RSI 5M</th>
+            <th>VAL</th>
+            <th>FASE</th>
+            <th>TREND</th>
           </tr>
         </thead>
         <tbody>
@@ -721,115 +883,192 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         </tbody>
       </table>
       </div>
-      <div class="footer-line">Universe IDX | pre-filter likuiditas | yfinance mode</div>
+      <div class="footer-line">AKSI=tindakan trader | SINYAL=kondisi pasar | SL≈1xATR | TP≈2xATR | scan pro mode</div>
     </div>
     </body>
     </html>
     """
     return html
 
+
 def split_screeners(df: pd.DataFrame):
     day_trading = df.sort_values(by=["score_scalping", "score_total", "rvol"], ascending=False).head(10)
-    rebound = df.sort_values(by=["score_bsjp", "rsi_5m", "score_total"], ascending=[False, True, False]).head(10)
+    rebound = df.sort_values(by=["score_bsjp", "score_total", "rsi_5m"], ascending=[False, False, True]).head(10)
     swing = df.sort_values(by=["score_swing", "score_bandar", "score_total"], ascending=False).head(10)
     return day_trading, rebound, swing
 
+
+# =========================================================
+# CHART
+# =========================================================
 def show_detail_chart(df: pd.DataFrame, symbol_name: str):
     st.subheader(f"Chart Detail: {symbol_name}")
+
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candlestick"))
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        name="Candlestick"
+    ))
     fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], mode="lines", name="MA20"))
     fig.add_trace(go.Scatter(x=df.index, y=df["MA50"], mode="lines", name="MA50"))
     fig.add_trace(go.Scatter(x=df.index, y=df["BB_UPPER"], mode="lines", name="BB Upper"))
     fig.add_trace(go.Scatter(x=df.index, y=df["BB_LOWER"], mode="lines", name="BB Lower"))
-    fig.update_layout(height=520, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=40, b=20))
+    fig.update_layout(
+        height=520,
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=20, r=20, t=40, b=20),
+    )
     st.plotly_chart(fig, use_container_width=True)
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        fig_rsi = go.Figure()
+        fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI"))
+        fig_rsi.add_hline(y=70, line_dash="dash")
+        fig_rsi.add_hline(y=30, line_dash="dash")
+        fig_rsi.update_layout(height=280, template="plotly_dark", title="RSI")
+        st.plotly_chart(fig_rsi, use_container_width=True)
+
+    with c2:
+        fig_macd = go.Figure()
+        fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], mode="lines", name="MACD"))
+        fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD_SIGNAL"], mode="lines", name="Signal"))
+        fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD_HIST"], name="Histogram"))
+        fig_macd.update_layout(height=280, template="plotly_dark", title="MACD")
+        st.plotly_chart(fig_macd, use_container_width=True)
+
 
 # =========================================================
 # UI
 # =========================================================
-st.title("HIGH PROB SCREENER IDX — ALL EMITEN SCAN")
+st.title("HIGH PROB SCREENER IDX PRO")
 st.markdown(
-    '<div class="small-note">Scan semua emiten IDX, lalu filter jadi kandidat terbaik dengan pre-filter likuiditas + scoring teknikal.</div>',
-    unsafe_allow_html=True
+    '<div class="small-note">Versi pro: scan paralel, mode strategi, preset filter, progress scan, top picks, dan universe semua emiten IDX atau input manual.</div>',
+    unsafe_allow_html=True,
 )
 
 with st.sidebar:
     st.header("Mode Scan")
-    scan_mode = st.radio("Sumber universe", ["Scan semua emiten IDX", "Masukkan daftar emiten manual"], index=0)
+    scan_mode = st.radio(
+        "Sumber universe",
+        ["Scan semua emiten IDX", "Masukkan daftar emiten manual"],
+        index=0
+    )
+
+    strategy_mode = st.selectbox(
+        "Mode Strategi",
+        ["All", "Scalping", "BSJP", "Swing"],
+        index=0
+    )
+
     period = st.selectbox("Periode", ["3mo", "6mo", "1y", "2y"], index=1)
     interval = st.selectbox("Interval", ["1d", "1wk"], index=0)
 
+    st.subheader("Preset Filter")
+    preset = st.selectbox("Preset", ["Custom", "Conservative", "Aggressive"], index=0)
+
+    default_min_price = 50
+    default_min_avg_vol = 100_000
+    default_min_value = 1_000_000_000
+
+    if preset == "Conservative":
+        default_min_price = 200
+        default_min_avg_vol = 300_000
+        default_min_value = 3_000_000_000
+    elif preset == "Aggressive":
+        default_min_price = 50
+        default_min_avg_vol = 50_000
+        default_min_value = 500_000_000
+
     st.subheader("Pre-filter Likuiditas")
-    min_price = st.number_input("Harga minimum", min_value=1, value=50, step=10)
-    min_avg_vol = st.number_input("Rata-rata volume minimum (20 hari)", min_value=0, value=100000, step=50000)
-    min_value = st.number_input("Rata-rata value minimum (Rp, 20 hari)", min_value=0, value=1000000000, step=100000000)
+    min_price = st.number_input("Harga minimum", min_value=1, value=int(default_min_price), step=10)
+    min_avg_vol = st.number_input("Rata-rata volume minimum (20 hari)", min_value=0, value=int(default_min_avg_vol), step=50_000)
+    min_value = st.number_input("Rata-rata value minimum (Rp, 20 hari)", min_value=0, value=int(default_min_value), step=100_000_000)
 
     st.subheader("Batas Scan")
     limit_scan = st.number_input("Maksimum emiten diproses", min_value=20, value=200, step=20)
     top_n = st.number_input("Jumlah kandidat terbaik", min_value=5, value=20, step=5)
+    max_workers = st.number_input("Parallel workers", min_value=2, value=10, step=1)
 
     manual_symbols = st.text_area(
-        "Daftar emiten manual (opsional, pisahkan koma)",
+        "Daftar emiten manual (pisahkan koma)",
         value="BBCA,BBRI,BMRI,TLKM,ASII",
         height=120,
-        disabled=(scan_mode == "Scan semua emiten IDX")
+        disabled=(scan_mode == "Scan semua emiten IDX"),
     )
 
-    run_btn = st.button("Jalankan Scan", use_container_width=True)
+    auto_refresh = st.checkbox("Auto Refresh 60 detik", value=False)
+    run_btn = st.button("Jalankan Scan Pro", use_container_width=True)
 
 if run_btn or "scan_result_df" not in st.session_state:
-    with st.spinner("Menyiapkan universe IDX dan menyaring kandidat terbaik..."):
+    with st.spinner("Menyiapkan universe dan scan pro..."):
         if scan_mode == "Scan semua emiten IDX":
             universe = get_all_idx_symbols()
         else:
             universe = [normalize_jk_symbol(x) for x in manual_symbols.split(",") if x.strip()]
             universe = [x for x in universe if x]
 
-        result_df, scanned, passed_prefilter = run_screener(
+        result_df, scanned, passed_prefilter = run_screener_pro(
             universe,
             period=period,
             interval=interval,
             min_price=min_price,
             min_avg_vol=min_avg_vol,
             min_value=min_value,
-            limit_scan=limit_scan
+            limit_scan=int(limit_scan),
+            max_workers=int(max_workers),
         )
+
+        result_df = sort_by_strategy(result_df, strategy_mode)
+
         st.session_state["scan_result_df"] = result_df
         st.session_state["scan_meta"] = {
             "universe_count": len(universe),
             "scanned": scanned,
-            "passed_prefilter": passed_prefilter
+            "passed_prefilter": passed_prefilter,
+            "strategy_mode": strategy_mode,
         }
 
 screener_df = st.session_state.get("scan_result_df", pd.DataFrame())
 meta = st.session_state.get("scan_meta", {})
 
 if screener_df.empty:
-    st.error("Belum ada kandidat yang lolos. Coba turunkan filter likuiditas atau perbesar batas scan.")
+    st.error("Belum ada kandidat yang lolos. Turunkan filter atau perbesar batas scan.")
     st.stop()
 
 best_df = screener_df.head(int(top_n))
 day_df, rebound_df, swing_df = split_screeners(best_df)
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Universe", meta.get("universe_count", 0))
 c2.metric("Diproses", meta.get("scanned", 0))
-c3.metric("Lolos Pre-filter", meta.get("passed_prefilter", 0))
-c4.metric("Top Pick", best_df.iloc[0]["symbol"])
+c3.metric("Lolos Filter", meta.get("passed_prefilter", 0))
+c4.metric("Mode", meta.get("strategy_mode", "-"))
+c5.metric("Top Pick", best_df.iloc[0]["symbol"])
+
+st.subheader("🔥 Top Picks Hari Ini")
+top3 = best_df.head(3)
+for idx, (_, row) in enumerate(top3.iterrows(), start=1):
+    st.success(f"#{idx} {row['symbol']} | Score {int(row['score_total'])} | Sinyal {row['sinyal']} | Trend {row['trend']}")
 
 components.html(
-    make_html_table(day_df, "TOP DAY TRADING PICKS", "Dari seluruh universe IDX yang diproses"),
+    make_html_table(day_df, "TOP DAY TRADING PICKS", "Momentum cepat | breakout | RVOL | RSI 5M | ATR"),
     height=420,
     scrolling=True
 )
 components.html(
-    make_html_table(rebound_df, "TOP BSJP / REBOUND PICKS", "Kandidat rebound terbaik setelah filter likuiditas"),
+    make_html_table(rebound_df, "TOP BSJP / REBOUND PICKS", "Buy saat jenuh penurunan | support | lower band | early rebound"),
     height=420,
     scrolling=True
 )
 components.html(
-    make_html_table(swing_df, "TOP SWING / TREND PICKS", "Kandidat trend terbaik setelah filter likuiditas"),
+    make_html_table(swing_df, "TOP SWING / TREND PICKS", "Trend menengah | MA20/MA50 | MACD | akumulasi price-volume"),
     height=420,
     scrolling=True
 )
@@ -858,4 +1097,38 @@ d5.metric("VAL", human_value(selected_row["val"]))
 
 show_detail_chart(selected_df, selected_row["symbol"])
 
-st.caption("Universe saham diambil dari daftar saham IDX resmi. Harga/volume teknikal harian dan intraday pada app ini memakai yfinance, sehingga cocok untuk screening kandidat, bukan feed eksekusi trading real-time penuh.")
+st.subheader("Analisa Strategi")
+t1, t2, t3, t4 = st.tabs(["1. Scalping", "2. BSJP", "3. Swing", "4. Bandarmologi"])
+
+with t1:
+    st.write("Logika: momentum cepat, EMA9/MA20, volume aktif, breakout, risk/reward, dan likuiditas.")
+    st.metric("Skor Scalping", int(selected_row["score_scalping"]))
+    st.write(f"Aksi: **{selected_row['aksi']}**")
+    st.write(f"Sinyal: **{selected_row['sinyal']}**")
+    st.write(f"Entry: **{fmt_price(selected_row['entry'])}**")
+    st.write(f"TP: **{fmt_price(selected_row['tp'])}**")
+    st.write(f"SL: **{fmt_price(selected_row['sl'])}**")
+
+with t2:
+    st.write("Logika: buy saat jenuh penurunan, dekat support/lower band, mulai muncul rebound.")
+    st.metric("Skor BSJP", int(selected_row["score_bsjp"]))
+    st.write(f"RSI 5M: **{rsi_cell_text(selected_row['rsi_5m'])}**")
+    st.write(f"Fase: **{selected_row['fase']}**")
+
+with t3:
+    st.write("Logika: trend menengah, MA20/MA50, MACD, volume, posisi harga, dan liquidity bonus.")
+    st.metric("Skor Swing", int(selected_row["score_swing"]))
+    st.write(f"Trend: **{selected_row['trend']}**")
+    st.write(f"% To TP: **{fmt_pct(selected_row['to_tp'])}**")
+
+with t4:
+    st.write("Logika: proxy bandarmologi dari akumulasi/distribusi berbasis harga-volume.")
+    st.metric("Skor Bandarmologi", int(selected_row["score_bandar"]))
+    st.write(f"Fase: **{selected_row['fase']}**")
+    st.write(f"Value transaksi: **{human_value(selected_row['val'])}**")
+
+st.caption("Universe saham diambil dari daftar saham IDX resmi bila mode scan semua dipilih. Harga dan volume teknikal pada app ini memakai yfinance, jadi ini cocok untuk screening kandidat, bukan feed eksekusi real-time penuh.")
+
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()
