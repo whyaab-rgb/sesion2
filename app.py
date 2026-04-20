@@ -13,7 +13,7 @@ st.set_page_config(page_title="High Prob Screener", layout="wide")
 # WATCHLIST PRESET
 # =========================================================
 WATCHLISTS = {
-
+idx_sub1000_full = {
     "Sub 1000 - Campuran": [
         "GOTO.JK", "BUKA.JK", "IPTV.JK", "SCMA.JK",
         "MLPL.JK", "DMMX.JK", "ZYRX.JK"
