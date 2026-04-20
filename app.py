@@ -13,30 +13,52 @@ st.set_page_config(page_title="High Prob Screener", layout="wide")
 # WATCHLIST PRESET
 # =========================================================
 WATCHLISTS = {
+
     "Sub 1000 - Campuran": [
-        "GOTO.JK", "BUKA.JK", "ERAA.JK", "EXCL.JK", "ISAT.JK",
-        "PGAS.JK", "MEDC.JK", "ANTM.JK", "TINS.JK", "BRIS.JK",
-        "ADMR.JK", "ELSA.JK", "ESSA.JK", "PTPP.JK", "WIKA.JK",
-        "WSKT.JK", "SMDR.JK", "TMAS.JK", "IPTV.JK", "MAPI.JK",
-        "ACES.JK", "SIDO.JK", "MYOR.JK", "PWON.JK", "BSDE.JK",
-        "CTRA.JK", "SCMA.JK", "DOID.JK", "DEWA.JK", "HEAL.JK"
+        "GOTO.JK", "BUKA.JK", "IPTV.JK", "SCMA.JK",
+        "MLPL.JK", "DMMX.JK", "ZYRX.JK"
     ],
+
     "Sub 1000 - Banking & Finance": [
-        "BRIS.JK", "BNGA.JK", "PNBN.JK", "AGRO.JK", "BABP.JK",
-        "BJTM.JK", "BJBR.JK", "BBYB.JK", "BACA.JK", "BANK.JK"
+        "BRIS.JK", "BNGA.JK", "PNBN.JK", "AGRO.JK",
+        "BABP.JK", "BJTM.JK", "BJBR.JK", "BBYB.JK",
+        "BACA.JK", "BANK.JK", "BEKS.JK", "SDRA.JK"
     ],
+
     "Sub 1000 - Energi & Komoditas": [
-        "PGAS.JK", "MEDC.JK", "ELSA.JK", "ADMR.JK", "DOID.JK",
-        "DEWA.JK", "ANTM.JK", "TINS.JK", "HRUM.JK", "PTBA.JK"
+        "PGAS.JK", "MEDC.JK", "ELSA.JK", "ADMR.JK",
+        "DOID.JK", "DEWA.JK", "ANTM.JK", "TINS.JK",
+        "HRUM.JK", "BUMI.JK", "INDY.JK"
     ],
+
     "Sub 1000 - Consumer & Retail": [
-        "ERAA.JK", "ACES.JK", "MAPI.JK", "SIDO.JK", "MYOR.JK",
-        "MPPA.JK", "RALS.JK", "LPPF.JK", "AMRT.JK", "MIDI.JK"
+        "ERAA.JK", "ACES.JK", "MAPI.JK", "SIDO.JK",
+        "MYOR.JK", "MPPA.JK", "RALS.JK", "LPPF.JK",
+        "MIDI.JK", "HERO.JK", "CENT.JK"
     ],
+
     "Sub 1000 - Property & Infrastruktur": [
-        "PWON.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK", "PTPP.JK",
-        "WIKA.JK", "WSKT.JK", "DGIK.JK", "TOTL.JK", "WEGE.JK"
+        "PWON.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK",
+        "PTPP.JK", "WIKA.JK", "WSKT.JK",
+        "DGIK.JK", "TOTL.JK", "WEGE.JK",
+        "SSIA.JK", "KIJA.JK"
     ],
+
+    "Sub 1000 - Transport & Logistik": [
+        "SMDR.JK", "TMAS.JK", "ASSA.JK",
+        "BIRD.JK", "NELY.JK"
+    ],
+
+    "Sub 1000 - Healthcare": [
+        "HEAL.JK", "SILO.JK", "CARE.JK",
+        "PRDA.JK", "DGNS.JK"
+    ],
+
+    "Sub 1000 - Technology": [
+        "MTDL.JK", "DIVA.JK", "EDGE.JK",
+        "TECH.JK", "KIOS.JK"
+    ]
+},
     "Custom": []
 }
 
