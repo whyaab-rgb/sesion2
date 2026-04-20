@@ -57,8 +57,8 @@ WATCHLISTS = {
     "Sub 1000 - Technology": [
         "MTDL.JK", "DIVA.JK", "EDGE.JK",
         "TECH.JK", "KIOS.JK"
-    ]
-}
+    ],
+},
     "Custom": []
 }
 
