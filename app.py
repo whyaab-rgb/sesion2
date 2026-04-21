@@ -13,50 +13,47 @@ st.set_page_config(page_title="High Prob Screener", layout="wide")
 # WATCHLIST PRESET
 # =========================================================
 WATCHLISTS = {
-    "Sub 1000 - Campuran": [
-        "GOTO.JK", "BUKA.JK", "IPTV.JK", "SCMA.JK",
-        "MLPL.JK", "DMMX.JK", "ZYRX.JK"
-    ],
-
-    "Sub 1000 - Banking & Finance": [
-        "BRIS.JK", "BNGA.JK", "PNBN.JK", "AGRO.JK",
-        "BABP.JK", "BJTM.JK", "BJBR.JK", "BBYB.JK",
-        "BACA.JK", "BANK.JK", "BEKS.JK", "SDRA.JK"
-    ],
-
-    "Sub 1000 - Energi & Komoditas": [
-        "PGAS.JK", "MEDC.JK", "ELSA.JK", "ADMR.JK",
-        "DOID.JK", "DEWA.JK", "ANTM.JK", "TINS.JK",
-        "HRUM.JK", "BUMI.JK", "INDY.JK"
-    ],
-
-    "Sub 1000 - Consumer & Retail": [
-        "ERAA.JK", "ACES.JK", "MAPI.JK", "SIDO.JK",
-        "MYOR.JK", "MPPA.JK", "RALS.JK", "LPPF.JK",
-        "MIDI.JK", "HERO.JK", "CENT.JK"
-    ],
-
-    "Sub 1000 - Property & Infrastruktur": [
-        "PWON.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK",
-        "PTPP.JK", "WIKA.JK", "WSKT.JK",
-        "DGIK.JK", "TOTL.JK", "WEGE.JK",
-        "SSIA.JK", "KIJA.JK"
-    ],
-
-    "Sub 1000 - Transport & Logistik": [
-        "SMDR.JK", "TMAS.JK", "ASSA.JK",
-        "BIRD.JK", "NELY.JK"
-    ],
-
-    "Sub 1000 - Healthcare": [
-        "HEAL.JK", "SILO.JK", "CARE.JK",
-        "PRDA.JK", "DGNS.JK"
-    ],
-
-    "Sub 1000 - Technology": [
-        "MTDL.JK", "DIVA.JK", "EDGE.JK",
-        "TECH.JK", "KIOS.JK"
-    ],
+"AALI","ABBA","ABDA","ABMM","ACES","ACST","ADCP","ADES","ADHI","ADMF","ADMG","ADMR","ADRO",
+"AGAR","AGII","AGRO","AGRS","AHAP","AIMS","AISA","AKKU","AKPI","AKRA","AKSI","ALDO","ALKA",
+"ALMI","ALTO","AMAG","AMFG","AMIN","AMMN","AMRT","ANDI","ANJT","ANTM","APEX","APIC","APII",
+"APLI","APLN","ARCI","ARGO","ARII","ARKA","ARMY","ARTI","ARTO","ASBI","ASDM","ASGR","ASII",
+"ASJT","ASMI","ASRI","ASRM","ASUR","ATAP","ATIC","ATPK","AUTO","AVIA","AWAN","AXIO","BACA",
+"BAJA","BALI","BANK","BAPA","BATA","BAUT","BBCA","BBHI","BBKP","BBLD","BBMD","BBNI","BBRI",
+"BBTN","BBYB","BCAP","BCIC","BDMN","BEKS","BELL","BEST","BFIN","BGTR","BHIT","BIKA","BIMA",
+"BINA","BIRD","BISI","BKDP","BKSL","BLTA","BLUE","BMHS","BMRI","BMSR","BMTR","BNBA","BNBR",
+"BNGA","BNII","BNLI","BNRI","BOBA","BOGA","BOIS","BOLT","BOSS","BPIS","BRAM","BRIS","BRMS",
+"BRNA","BRPT","BSDE","BSSR","BSWD","BTBA","BTON","BULL","BUMI","BVIC","BWPT","BYAN","CAKK",
+"CAMP","CANB","CARS","CASS","CBMF","CBPE","CBUT","CCSI","CEKA","CFIN","CGAS","CHIP","CINT",
+"CITA","CLAY","CLEO","CMNP","CMRY","CNKO","COWL","CPIN","CSAP","CSIS","CTBN","CTRA","CTTH",
+"DAAZ","DADA","DART","DAYA","DEAL","DEFI","DEPO","DEWA","DFAM","DFAR","DFIL","DKFT","DLTA",
+"DMAS","DNAR","DOID","DPNS","DSFI","DSNG","DSSA","DUTI","DYAN","ECII","EDGE","ELSA","ELTY",
+"EMDE","EMTK","ENAK","ENRG","ENZO","EPAC","ERAA","ESTA","ETWA","EXCL","FAST","FASW","FCAP",
+"FMII","FORU","FPNI","FREN","FUTR","GAMA","GGRM","GIAA","GJTL","GLVA","GMFI","GOTO","GOOD",
+"GPRA","GREN","GTBO","GTSI","GULA","GZCO","HADE","HAIS","HDIT","HEAL","HERO","HITS","HKMU",
+"HMAS","HMET","HMSP","HOKI","HRTA","HRUM","IBST","ICBP","ICON","IDPR","IFII","IGAR","IIKP",
+"IKAN","IKBI","IMAS","IMJS","IMPC","INAF","INAI","INCF","INCO","INDF","INDR","INDY","INKP",
+"INOV","INPP","INPS","INTA","INTP","IPCM","IPTV","ISAT","ITIC","ITMA","ITMG","JARR","JAST",
+"JAYA","JECC","JGLE","JKON","JKSW","JMAS","JPFA","JSMR","JSPT","KAEF","KARW","KAYU","KBLM",
+"KBLV","KBRI","KDSI","KEEN","KEJU","KIAS","KICI","KINO","KIOS","KJEN","KLBV","KLBF","KMDS",
+"KMTR","KOBX","KONI","KOPI","KOTA","KRAH","KRAS","LABA","LAPD","LCGP","LEAD","LETO","LIFE",
+"LINK","LION","LMAS","LMPI","LMPP","LOPI","LPCK","LPIN","LPLI","LPKR","LPPF","LPPS","LRNA",
+"LSIP","LTLS","LUCY","MAGP","MAIN","MAPA","MAPI","MARK","MASB","MASP","MAYA","MBAP","MBSS",
+"MCAS","MCOL","MCOR","MDKA","MEDC","MEGA","MERK","MFMI","MGNA","MGRO","MIDI","MIKA","MIRA",
+"MITI","MLBI","MLIA","MLPL","MLPT","MMLP","MNCN","MOLI","MORE","MPMX","MPPA","MRAT","MREI",
+"MSIN","MSKY","MTDL","MTFN","MTLA","MTPS","MYOH","MYOR","MYRX","NATO","NELY","NFCX","NIKL",
+"NINE","NIPS","NISP","NOBU","NPGF","NRCA","NTBK","OASA","OKAS","OMRE","OPMS","PACK","PADI",
+"PAMG","PANI","PANS","PARK","PBID","PBRX","PCAR","PDES","PEGE","PEHA","PGAS","PGJO","PGLI",
+"PICO","PKPK","PLAS","PLIN","PMMP","PNBN","PNBS","PNGO","PNIN","PNLF","PNSE","POLI","POLL",
+"POLU","POWR","PPGL","PPRE","PPRO","PRAS","PRDA","PRIM","PSAB","PSDN","PSGO","PTBA","PTPP",
+"PTRO","PTSN","PTSP","PTPW","PUDP","PURA","PWON","PYFA","RAJA","RALS","RANC","RDTX","RELI",
+"RICY","RIMO","RISE","RJHI","RODA","ROTI","RUIS","RUNC","RVLT","SAFE","SAME","SAMF","SAPX",
+"SATM","SBAT","SCMA","SDMU","SDPC","SDRA","SEMA","SGER","SHID","SIDO","SILO","SIMP","SIMS",
+"SIPD","SIRT","SKBM","SKLT","SMAR","SMBR","SMCB","SMDR","SMGR","SMKL","SMRA","SMRU","SMSM",
+"SMSS","SOCI","SOHO","SOTS","SPMA","SPTO","SRIL","SRTG","SSIA","SSMS","STAR","STTP","SUGI",
+"SULI","SUMI","SURI","TALF","TAXI","TBIG","TBLA","TBSL","TBMS","TCID","TEBE","TELE","TFCO",
+"TIFA","TINS","TLKM","TMAS","TOTO","TOWR","TOYS","TPIA","TRAM","TRIM","TRIN","TRIS","TRJA",
+"TRST","TRUK","TRUS","TRYP","TSPC","ULTJ","UNIQ","UNSP","UNTR","UNVR","VICI","VICO","VINS",
+"VIVA","WEGE","WICO","WIKA","WINS","WOOD","WOMF","WSBP","WSKT","WTON","YULE","ZBRA"
     "Custom": []
 }
 
