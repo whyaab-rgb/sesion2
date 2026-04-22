@@ -1,5 +1,5 @@
-import time
 import textwrap
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="High Prob Screener", layout="wide")
 
 # =========================================================
-# WATCHLIST PRESET
+# WATCHLIST MASTER
 # =========================================================
 SYMBOLS = [
 "AALI.JK","ABBA.JK","ABDA.JK","ABMM.JK","ACES.JK","ACST.JK","ADCP.JK","ADES.JK","ADHI.JK","ADMF.JK","ADMG.JK","ADMR.JK","ADRO.JK",
@@ -57,9 +57,17 @@ SYMBOLS = [
 ]
 
 MAX_PRICE = 1000
+TOP_N = 30
+
+WATCHLISTS = {
+    "IDX Top 100": SYMBOLS[:100],
+    "IDX Top 300": SYMBOLS[:300],
+    "All Master": SYMBOLS,
+    "Custom": []
+}
 
 # =========================================================
-# GLOBAL PAGE STYLE
+# GLOBAL STYLE
 # =========================================================
 st.markdown("""
 <style>
@@ -85,8 +93,29 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {
     font-size: 12px;
     color: #9db1cc !important;
 }
+.metric-box {
+    background:#0d1a29;
+    border:1px solid #17324d;
+    border-radius:12px;
+    padding:10px;
+}
 </style>
 """, unsafe_allow_html=True)
+
+# =========================================================
+# AUTO REFRESH
+# =========================================================
+def auto_refresh_fragment(seconds: int):
+    st.markdown(
+        f"""
+        <script>
+        setTimeout(function() {{
+            window.parent.location.reload();
+        }}, {seconds * 1000});
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 # =========================================================
 # HELPERS
@@ -101,31 +130,69 @@ def normalize_jk_symbol(symbol: str) -> str:
         s = f"{s}.JK"
     return s
 
+def latest(series: pd.Series) -> float:
+    try:
+        return float(series.iloc[-1])
+    except Exception:
+        return np.nan
+
+def fmt_price(v):
+    if pd.isna(v):
+        return "-"
+    if v >= 100:
+        return f"{v:,.0f}"
+    return f"{v:,.2f}"
+
+def fmt_pct(v):
+    if pd.isna(v):
+        return "-"
+    return f"{v:.1f}%"
+
+def rsi_cell_text(v):
+    if pd.isna(v):
+        return "-"
+    return f"{v:.1f}"
+
+def human_value(v):
+    if pd.isna(v):
+        return "-"
+    if v >= 1_000_000_000_000:
+        return f"{v / 1_000_000_000_000:.1f}T"
+    if v >= 1_000_000_000:
+        return f"{v / 1_000_000_000:.1f}B"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    return f"{v:,.0f}"
+
 # =========================================================
 # DATA SOURCE
 # =========================================================
 @st.cache_data(ttl=300)
 def get_ohlcv(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
-    df = yf.download(
-        symbol,
-        period=period,
-        interval=interval,
-        auto_adjust=False,
-        progress=False
-    )
+    try:
+        df = yf.download(
+            symbol,
+            period=period,
+            interval=interval,
+            auto_adjust=False,
+            progress=False,
+            threads=False
+        )
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-    if df.empty:
-        return pd.DataFrame()
-
-    required = ["Open", "High", "Low", "Close", "Volume"]
-    for col in required:
-        if col not in df.columns:
+        if df.empty:
             return pd.DataFrame()
 
-    return df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        for col in required:
+            if col not in df.columns:
+                return pd.DataFrame()
+
+        return df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -136,7 +203,8 @@ def get_intraday_5m(symbol: str) -> pd.DataFrame:
             period="5d",
             interval="5m",
             auto_adjust=False,
-            progress=False
+            progress=False,
+            threads=False
         )
 
         if isinstance(df.columns, pd.MultiIndex):
@@ -167,7 +235,7 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean().replace(0, np.nan)
     rs = avg_gain / avg_loss
     x["RSI"] = 100 - (100 / (1 + rs))
 
@@ -194,8 +262,6 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     x["ATR14"] = tr.rolling(14).mean()
 
-    x["RET"] = x["Close"].pct_change() * 100
-
     body = (x["Close"] - x["Open"]).abs()
     upper_wick = x["High"] - x[["Open", "Close"]].max(axis=1)
     lower_wick = x[["Open", "Close"]].min(axis=1) - x["Low"]
@@ -207,44 +273,6 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     x["WICK_PCT"] = ((x["UPPER_WICK"] + x["LOWER_WICK"]) / candle_range) * 100
 
     return x
-
-
-def latest(series: pd.Series) -> float:
-    try:
-        return float(series.iloc[-1])
-    except Exception:
-        return np.nan
-
-# =========================================================
-# FORMATTERS
-# =========================================================
-def fmt_price(v):
-    if pd.isna(v):
-        return "-"
-    if v >= 100:
-        return f"{v:,.0f}"
-    return f"{v:,.2f}"
-
-def fmt_pct(v):
-    if pd.isna(v):
-        return "-"
-    return f"{v:.1f}%"
-
-def rsi_cell_text(v):
-    if pd.isna(v):
-        return "-"
-    return f"{v:.1f}"
-
-def human_value(v):
-    if pd.isna(v):
-        return "-"
-    if v >= 1_000_000_000_000:
-        return f"{v / 1_000_000_000_000:.1f}T"
-    if v >= 1_000_000_000:
-        return f"{v / 1_000_000_000:.1f}B"
-    if v >= 1_000_000:
-        return f"{v / 1_000_000:.1f}M"
-    return f"{v:,.0f}"
 
 # =========================================================
 # SIGNAL ENGINE
@@ -362,18 +390,19 @@ def compute_scores(df: pd.DataFrame):
         scalping += 2
     if macd > macd_signal:
         scalping += 2
-    if volume > vol_ma5:
+    if not pd.isna(vol_ma5) and volume > vol_ma5:
         scalping += 2
     if not pd.isna(resistance) and close_ >= resistance * 0.985:
         scalping += 1
-    if wick < 35:
+    if not pd.isna(wick) and wick < 35:
         scalping += 1
 
     bsjp = 0
-    if rsi < 35:
-        bsjp += 3
-    elif 35 <= rsi <= 45:
-        bsjp += 1
+    if not pd.isna(rsi):
+        if rsi < 35:
+            bsjp += 3
+        elif 35 <= rsi <= 45:
+            bsjp += 1
     if not pd.isna(bb_lower) and close_ <= bb_lower * 1.03:
         bsjp += 2
     if not pd.isna(support) and close_ <= support * 1.05:
@@ -390,7 +419,7 @@ def compute_scores(df: pd.DataFrame):
         swing += 2
     if macd > macd_signal:
         swing += 2
-    if volume > vol_ma20:
+    if not pd.isna(vol_ma20) and volume > vol_ma20:
         swing += 1
     if (not pd.isna(resistance)) and (not pd.isna(support)):
         if close_ < resistance * 0.93 and close_ > support * 1.08:
@@ -419,6 +448,63 @@ def compute_scores(df: pd.DataFrame):
     }
 
 
+def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain):
+    score = 0
+
+    if not pd.isna(rvol):
+        if rvol >= 250:
+            score += 30
+        elif rvol >= 180:
+            score += 24
+        elif rvol >= 120:
+            score += 18
+        elif rvol >= 100:
+            score += 10
+
+    if not pd.isna(val):
+        if val >= 100_000_000_000:
+            score += 20
+        elif val >= 50_000_000_000:
+            score += 15
+        elif val >= 20_000_000_000:
+            score += 10
+        elif val >= 10_000_000_000:
+            score += 6
+
+    if not pd.isna(close_) and not pd.isna(ma20) and close_ > ma20:
+        score += 8
+    if not pd.isna(ma20) and not pd.isna(ma50) and ma20 > ma50:
+        score += 8
+
+    if not pd.isna(rsi):
+        if 52 <= rsi <= 68:
+            score += 10
+        elif 45 <= rsi < 52:
+            score += 5
+
+    if phase == "BIG AKUM":
+        score += 15
+    elif phase == "AKUM":
+        score += 10
+    elif phase == "DIST":
+        score -= 8
+    elif phase == "BIG DIST":
+        score -= 15
+
+    if signal in ["SUPER", "ON TRACK", "AKUM", "HAKA"]:
+        score += 10
+
+    if not pd.isna(gain):
+        if gain > 0:
+            score += 4
+        elif gain < -3:
+            score -= 5
+
+    return max(score, 0)
+
+# =========================================================
+# ROW BUILDER
+# =========================================================
 def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
     df = calc_indicators(daily_df)
     if len(df) < 30:
@@ -462,6 +548,7 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
 
     scores = compute_scores(df)
     total = scores["scalping"] + scores["bsjp"] + scores["swing"] + scores["bandar"]
+    accum_score = compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, sinyal, gain)
 
     return {
         "symbol": symbol.replace(".JK", ""),
@@ -477,6 +564,7 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
         "sl": sl,
         "profit": profit,
         "to_tp": to_tp,
+        "rsi": rsi,
         "rsi_sig": rsi_sig,
         "rsi_5m": intraday_rsi,
         "val": val,
@@ -487,6 +575,7 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
         "score_swing": scores["swing"],
         "score_bandar": scores["bandar"],
         "score_total": total,
+        "score_accum": accum_score,
         "daily_df": df
     }
 
@@ -513,10 +602,12 @@ def run_screener(symbols, period, interval, max_price=1000):
     if not rows:
         return pd.DataFrame()
 
-    return pd.DataFrame(rows).sort_values(
-        ["score_total", "rvol", "gain"],
-        ascending=[False, False, False]
+    out = pd.DataFrame(rows).sort_values(
+        ["score_accum", "score_total", "rvol", "gain"],
+        ascending=[False, False, False, False]
     ).reset_index(drop=True)
+
+    return out
 
 # =========================================================
 # CELL COLORS
@@ -535,11 +626,11 @@ def bg_gain(v):
 def bg_wick(v):
     if pd.isna(v):
         return "#243244"
-    if v < 1:
+    if v < 15:
         return "#0f766e"
-    if v < 2.5:
+    if v < 25:
         return "#2563eb"
-    if v < 4:
+    if v < 35:
         return "#d97706"
     return "#dc2626"
 
@@ -573,9 +664,9 @@ def bg_rvol(v):
         return "#243244"
     if v >= 250:
         return "#9333ea"
-    if v >= 120:
+    if v >= 150:
         return "#f97316"
-    if v >= 80:
+    if v >= 100:
         return "#2563eb"
     return "#374151"
 
@@ -646,8 +737,19 @@ def bg_trend(v):
     }
     return mapping.get(v, "#334155")
 
+def bg_accum_score(v):
+    if pd.isna(v):
+        return "#243244"
+    if v >= 70:
+        return "#9333ea"
+    if v >= 55:
+        return "#16a34a"
+    if v >= 40:
+        return "#2563eb"
+    return "#374151"
+
 # =========================================================
-# HTML TABLE RENDERER
+# HTML TABLE
 # =========================================================
 def make_html_table(df: pd.DataFrame, title: str, sub: str):
     html = textwrap.dedent(f"""
@@ -690,7 +792,7 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         width: 100%;
         border-collapse: collapse;
         font-size: 11px;
-        min-width: 1200px;
+        min-width: 1500px;
     }}
     .custom-table th {{
         background: #184574;
@@ -725,7 +827,10 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
       <table class="custom-table">
         <thead>
           <tr>
+            <th>RANK</th>
             <th>EMITEN</th>
+            <th>AKUM SCORE</th>
+            <th>TOTAL</th>
             <th>GAIN</th>
             <th>WICK</th>
             <th>AKSI</th>
@@ -738,6 +843,7 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
             <th>PROFIT</th>
             <th>%TO TP</th>
             <th>RSI SIG</th>
+            <th>RSI</th>
             <th>RSI 5M</th>
             <th>VAL</th>
             <th>FASE</th>
@@ -747,10 +853,13 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         <tbody>
     """)
 
-    for _, row in df.iterrows():
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
         html += f"""
         <tr>
+            <td style="background:#0f172a;color:#fff;">{i}</td>
             <td style="background:#1d4ed8;color:#fff;">{row['symbol']}</td>
+            <td style="background:{bg_accum_score(row['score_accum'])};color:#fff;">{int(row['score_accum'])}</td>
+            <td style="background:#0b3b66;color:#fff;">{int(row['score_total'])}</td>
             <td style="background:{bg_gain(row['gain'])};color:#fff;">{fmt_pct(row['gain'])}</td>
             <td style="background:{bg_wick(row['wick'])};color:#fff;">{fmt_pct(row['wick'])}</td>
             <td style="background:{bg_aksi(row['aksi'])};color:#fff;">{row['aksi']}</td>
@@ -763,6 +872,7 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
             <td style="background:{bg_profit(row['profit'])};color:#fff;">{fmt_pct(row['profit'])}</td>
             <td style="background:{bg_to_tp(row['to_tp'])};color:#fff;">{fmt_pct(row['to_tp'])}</td>
             <td style="background:{bg_rsi_sig(row['rsi_sig'])};color:#fff;">{row['rsi_sig']}</td>
+            <td style="background:{bg_rsi(row['rsi'])};color:#fff;">{rsi_cell_text(row['rsi'])}</td>
             <td style="background:{bg_rsi(row['rsi_5m'])};color:#fff;">{rsi_cell_text(row['rsi_5m'])}</td>
             <td style="background:#183b69;color:#fff;">{human_value(row['val'])}</td>
             <td style="background:{bg_fase(row['fase'])};color:#fff;">{row['fase']}</td>
@@ -774,7 +884,7 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         </tbody>
       </table>
       </div>
-      <div class="footer-line">AKSI=tindakan trader | SINYAL=kondisi pasar | SL≈1xATR | TP≈2xATR | filter harga ≤ 1000 | yfinance mode</div>
+      <div class="footer-line">Top 30 | fokus akumulasi + RVOL | SL≈1xATR | TP≈2xATR | filter harga ≤ 1000 | yfinance mode</div>
     </div>
     </body>
     </html>
@@ -830,9 +940,9 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
 # =========================================================
 # HEADER
 # =========================================================
-st.title("HIGH PROB SCREENER V1.3 — ALL IN ONE MAX PRICE 1000")
+st.title("HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI")
 st.markdown(
-    '<div class="small-note">1 tabel gabungan | search emiten mandiri | filter harga maksimal 1000 | auto refresh 60 detik</div>',
+    '<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh tersedia</div>',
     unsafe_allow_html=True
 )
 
@@ -845,7 +955,8 @@ with st.sidebar:
     watchlist_name = st.selectbox("Preset Watchlist", list(WATCHLISTS.keys()), index=0)
     period = st.selectbox("Periode", ["3mo", "6mo", "1y", "2y"], index=1)
     interval = st.selectbox("Interval", ["1d", "1wk"], index=0)
-    auto_refresh = st.checkbox("Auto Refresh 60 detik", value=False)
+    auto_refresh = st.checkbox("Auto Refresh", value=False)
+    refresh_sec = st.selectbox("Refresh tiap", [30, 60, 120, 300], index=1)
 
     default_symbols_text = ",".join(WATCHLISTS[watchlist_name]) if watchlist_name != "Custom" else ""
     custom_symbols = st.text_area(
@@ -872,6 +983,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.info(f"Filter aktif: harga saham maksimal {MAX_PRICE}")
+    st.info(f"Hasil utama dibatasi ke {TOP_N} saham terbaik")
 
 # =========================================================
 # PARSE SYMBOLS
@@ -905,78 +1017,88 @@ if run_btn or "screener_df" not in st.session_state:
             interval,
             max_price=MAX_PRICE
         )
+        st.session_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 screener_df = st.session_state.get("screener_df", pd.DataFrame())
 if screener_df.empty:
     st.error(f"Tidak ada data yang lolos filter. Pastikan kode emiten benar atau harga saham ≤ {MAX_PRICE}.")
     st.stop()
 
+display_df = screener_df.sort_values(
+    by=["score_accum", "score_total", "rvol", "gain"],
+    ascending=[False, False, False, False]
+).head(TOP_N).reset_index(drop=True)
+
 # =========================================================
 # TOP METRICS
 # =========================================================
-top_symbol = screener_df.iloc[0]["symbol"]
-top_score = int(screener_df.iloc[0]["score_total"])
-top_signal = screener_df.iloc[0]["sinyal"]
-top_phase = screener_df.iloc[0]["fase"]
-top_trend = screener_df.iloc[0]["trend"]
+top_symbol = display_df.iloc[0]["symbol"]
+top_accum = int(display_df.iloc[0]["score_accum"])
+top_score = int(display_df.iloc[0]["score_total"])
+top_signal = display_df.iloc[0]["sinyal"]
+top_phase = display_df.iloc[0]["fase"]
+last_run = st.session_state.get("last_run", "-")
 
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("TOP PICK", top_symbol)
-m2.metric("TOTAL SCORE", top_score)
-m3.metric("SIGNAL", top_signal)
-m4.metric("PHASE", top_phase)
-m5.metric("TREND", top_trend)
+m2.metric("AKUM SCORE", top_accum)
+m3.metric("TOTAL SCORE", top_score)
+m4.metric("SIGNAL", top_signal)
+m5.metric("LAST SCAN", last_run)
 
 # =========================================================
-# SINGLE SCREENER TABLE
+# MAIN TABLE
 # =========================================================
-st.subheader("Screener Gabungan")
-
-display_df = screener_df.sort_values(
-    by=["score_total", "rvol", "gain"],
-    ascending=[False, False, False]
-).reset_index(drop=True)
+st.subheader("Top 30 Saham Akumulasi")
 
 components.html(
     make_html_table(
         display_df,
-        "HIGH PROB SCREENER V1.3 — ALL IN ONE",
-        "Gabungan day trade | BSJP | swing | filter harga <= 1000"
+        "HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI",
+        "Ranking berdasarkan Akum Score + Total Score + RVOL + Gain"
     ),
-    height=520,
+    height=560,
     scrolling=True
 )
 
 # =========================================================
-# RANKING
+# RANKING TABLE
 # =========================================================
-st.subheader("Ranking Saham Tertinggi")
+st.subheader("Ranking 30 Data Terbaik")
 
-rank_df = screener_df[[
-    "symbol", "now", "gain", "rvol", "rsi_5m", "fase", "trend",
-    "score_scalping", "score_bsjp", "score_swing", "score_bandar", "score_total"
+rank_df = display_df[[
+    "symbol", "now", "gain", "rvol", "rsi", "rsi_5m", "val", "fase", "trend",
+    "score_accum", "score_scalping", "score_bsjp", "score_swing", "score_bandar", "score_total"
 ]].copy()
 
 rank_df.columns = [
-    "EMITEN", "PRICE", "GAIN", "RVOL", "RSI 5M", "FASE", "TREND",
-    "SCALPING", "BSJP", "SWING", "BANDAR", "TOTAL"
+    "EMITEN", "PRICE", "GAIN", "RVOL", "RSI", "RSI 5M", "VALUE", "FASE", "TREND",
+    "AKUM SCORE", "SCALPING", "BSJP", "SWING", "BANDAR", "TOTAL"
 ]
 
-st.dataframe(rank_df, use_container_width=True)
+rank_df["PRICE"] = rank_df["PRICE"].apply(fmt_price)
+rank_df["GAIN"] = rank_df["GAIN"].apply(fmt_pct)
+rank_df["RVOL"] = rank_df["RVOL"].apply(fmt_pct)
+rank_df["RSI"] = rank_df["RSI"].apply(rsi_cell_text)
+rank_df["RSI 5M"] = rank_df["RSI 5M"].apply(rsi_cell_text)
+rank_df["VALUE"] = rank_df["VALUE"].apply(human_value)
+
+st.dataframe(rank_df, use_container_width=True, height=520)
 
 # =========================================================
 # DETAIL PANEL
 # =========================================================
-selected_symbol = st.selectbox("Pilih saham untuk detail", screener_df["full_symbol"].tolist())
-selected_row = screener_df[screener_df["full_symbol"] == selected_symbol].iloc[0]
+selected_symbol = st.selectbox("Pilih saham untuk detail", display_df["full_symbol"].tolist())
+selected_row = display_df[display_df["full_symbol"] == selected_symbol].iloc[0]
 selected_df = selected_row["daily_df"]
 
-d1, d2, d3, d4, d5 = st.columns(5)
+d1, d2, d3, d4, d5, d6 = st.columns(6)
 d1.metric("EMITEN", selected_row["symbol"])
 d2.metric("PRICE", fmt_price(selected_row["now"]))
 d3.metric("GAIN", fmt_pct(selected_row["gain"]))
 d4.metric("RVOL", fmt_pct(selected_row["rvol"]))
-d5.metric("RSI 5M", rsi_cell_text(selected_row["rsi_5m"]))
+d5.metric("AKUM SCORE", int(selected_row["score_accum"]))
+d6.metric("RSI 5M", rsi_cell_text(selected_row["rsi_5m"]))
 
 show_detail_chart(selected_df, selected_row["symbol"])
 
@@ -996,6 +1118,7 @@ with t1:
 with t2:
     st.write("Logika: buy saat jenuh penurunan, dekat support atau lower band, lalu muncul tanda rebound.")
     st.metric("Skor BSJP", int(selected_row["score_bsjp"]))
+    st.write(f"RSI: **{rsi_cell_text(selected_row['rsi'])}**")
     st.write(f"RSI 5M: **{rsi_cell_text(selected_row['rsi_5m'])}**")
     st.write(f"Fase: **{selected_row['fase']}**")
 
@@ -1010,6 +1133,7 @@ with t4:
     st.metric("Skor Bandarmologi", int(selected_row["score_bandar"]))
     st.write(f"Fase: **{selected_row['fase']}**")
     st.write(f"Value transaksi: **{human_value(selected_row['val'])}**")
+    st.write(f"Akum Score: **{int(selected_row['score_accum'])}**")
 
 st.caption("Catatan: data saat ini memakai yfinance. Broker summary, foreign flow, dan orderbook belum tersedia di versi ini.")
 
@@ -1017,5 +1141,4 @@ st.caption("Catatan: data saat ini memakai yfinance. Broker summary, foreign flo
 # AUTO REFRESH
 # =========================================================
 if auto_refresh:
-    time.sleep(60)
-    st.rerun()
+    auto_refresh_fragment(refresh_sec)
