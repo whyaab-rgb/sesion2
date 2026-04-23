@@ -1024,17 +1024,12 @@ with st.sidebar:
     if send_test_btn:
         now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         test_message = (
-            "🤖 <b>Test Notifikasi Berhasil</b>
-"
-            "✅ Bot Telegram sudah terhubung ke screener.
-
-"
-            f"🕒 <b>Waktu:</b> {now_text}
-"
-            "📡 <b>Status:</b> ONLINE
-"
-            "🔥 Sistem siap mengirim alert saham."
-        )
+    "🤖 <b>Test Notifikasi Berhasil</b>\n"
+    "✅ Bot Telegram sudah terhubung ke screener.\n\n"
+    f"🕒 <b>Waktu:</b> {now_text}\n"
+    "📡 <b>Status:</b> ONLINE\n"
+    "🔥 Sistem siap mengirim alert saham."
+)
         ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, test_message)
         if ok:
             st.success("Pesan test berhasil dikirim.")
