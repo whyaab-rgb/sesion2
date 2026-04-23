@@ -1209,29 +1209,14 @@ st.markdown(
 # SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.header("Pengaturan")
+   st.markdown("---")
+st.subheader("Telegram Bot")
 
-    watchlist_name = st.selectbox("Preset Watchlist", list(WATCHLISTS.keys()), index=0)
-    period = st.selectbox("Periode", ["3mo", "6mo", "1y", "2y"], index=1)
-    interval = st.selectbox("Interval", ["1d", "1wk"], index=0)
-    auto_refresh = st.checkbox("Auto Refresh", value=False)
-    refresh_sec = st.selectbox("Refresh tiap", [30, 60, 120, 300], index=1)
-
-    default_symbols_text = ",".join(WATCHLISTS[watchlist_name]) if watchlist_name != "Custom" else ""
-    custom_symbols = st.text_area(
-        "Daftar saham watchlist (pisahkan koma)",
-        value=default_symbols_text,
-        height=160
-    )
-
-    st.markdown("---")
-    st.subheader("Telegram Bot")
-
-    telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
+telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
 telegram_bot_token = st.text_input("Bot Token", type="password")
 telegram_chat_id = st.text_input("Chat ID")
-telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=10, step=1)
-send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=True)
+telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=5, step=1)
+send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=False)
 send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
 
 if send_test_btn:
@@ -1323,18 +1308,19 @@ display_df = screener_df.sort_values(
 alert_df = build_telegram_alerts(display_df)
 
 # AUTO TELEGRAM NOTIF (ANTI SPAM)
-# AUTO TELEGRAM NOTIF (ANTI SPAM)
 if (
     telegram_enabled
     and auto_refresh
     and telegram_bot_token
     and telegram_chat_id
-    and not alert_df.empty
+    and not display_df.empty
 ):
+    source_df = alert_df.head(5) if send_only_alerts else display_df.head(5)
+
     current_alert_key = "|".join(
         [
             f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}"
-            for _, row in alert_df.head(10).iterrows()
+            for _, row in source_df.iterrows()
         ]
     )
 
@@ -1343,13 +1329,13 @@ if (
     if current_alert_key != last_alert_key:
         if send_only_alerts:
             message = build_telegram_strong_alert_message(
-                alert_df,
-                top_n=min(int(telegram_top_n), len(alert_df))
+                source_df,
+                top_n=5
             )
         else:
             message = build_telegram_watchlist_message(
-                alert_df,
-                top_n=min(int(telegram_top_n), len(alert_df))
+                source_df,
+                top_n=5
             )
 
         ok, msg = send_telegram_message(
@@ -1387,16 +1373,16 @@ with cbtn2:
 
 if telegram_enabled and send_now_btn:
     if send_only_alerts:
-        target_df = alert_df
+        target_df = alert_df.head(5)
         message = build_telegram_strong_alert_message(
             target_df,
-            top_n=int(telegram_top_n)
+            top_n=5
         )
     else:
-        target_df = display_df.head(int(telegram_top_n))
+        target_df = display_df.head(5)
         message = build_telegram_watchlist_message(
             target_df,
-            top_n=int(telegram_top_n)
+            top_n=5
         )
 
     ok, msg = send_telegram_message(
@@ -1406,7 +1392,7 @@ if telegram_enabled and send_now_btn:
     )
 
     if ok:
-        st.success("Notifikasi Telegram berhasil dikirim.")
+        st.success("5 emiten terbaik berhasil dikirim ke Telegram.")
     else:
         st.error(f"Gagal kirim Telegram: {msg}")
 
