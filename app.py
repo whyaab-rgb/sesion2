@@ -1223,15 +1223,15 @@ if (
 
     if current_alert_key != last_alert_key:
         if send_only_alerts:
-    message = build_telegram_strong_alert_message(
-        alert_df,
-        top_n=min(int(telegram_top_n), len(alert_df))
-    )
-else:
-    message = build_telegram_watchlist_message(
-        alert_df,
-        top_n=min(int(telegram_top_n), len(alert_df))
-    )
+            message = build_telegram_strong_alert_message(
+                alert_df,
+                top_n=min(int(telegram_top_n), len(alert_df))
+            )
+        else:
+            message = build_telegram_watchlist_message(
+                alert_df,
+                top_n=min(int(telegram_top_n), len(alert_df))
+            )
 
         ok, msg = send_telegram_message(
             telegram_bot_token,
@@ -1244,7 +1244,6 @@ else:
             st.success("Auto notif Telegram terkirim")
         else:
             st.warning(f"Gagal auto notif: {msg}")
-
 # =========================================================
 # TOP METRICS
 # =========================================================
