@@ -136,28 +136,154 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str):
         return False, str(e)
 
 
-def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 10):
+def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
     if df.empty:
-        return "Tidak ada saham yang lolos filter."
+        return "📭 <b>Tidak ada saham yang lolos filter</b>"
+
+    scan_time = st.session_state.get(
+        "last_run",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
 
     picked = df.head(top_n)
     lines = []
-    lines.append("<b>🔥 Top Saham Akumulasi</b>")
+    lines.append("🚨 <b>HIGH PROB SCREENER</b>")
+    lines.append(f"🕒 <b>{scan_time}</b>")
     lines.append("")
 
     for i, (_, row) in enumerate(picked.iterrows(), start=1):
-        lines.append(
-            f"{i}. <b>{row['symbol']}</b> | "
-            f"Price: {fmt_price(row['now'])} | "
-            f"Akum: <b>{int(row['score_accum'])}</b> | "
-            f"Total: {int(row['score_total'])} | "
-            f"RVOL: {fmt_pct(row['rvol'])} | "
-            f"Signal: {row['sinyal']} | "
-            f"Trend: {row['trend']}"
-        )
+        signal = str(row["sinyal"]).upper()
+        trend = str(row["trend"]).upper()
+        fase = str(row["fase"]).upper()
 
+        if signal == "SUPER":
+            signal_emoji = "🚀"
+        elif signal in ["AKUM", "ON TRACK", "HAKA", "GC NOW"]:
+            signal_emoji = "✅"
+        elif signal == "REBOUND":
+            signal_emoji = "🔄"
+        elif signal in ["DIST", "WASPADA OB"]:
+            signal_emoji = "⚠️"
+        else:
+            signal_emoji = "⏳"
+
+        trend_emoji = "📈" if trend == "BULL" else "📉" if trend == "BEAR" else "➡️"
+        fase_emoji = "🐂" if fase in ["AKUM", "BIG AKUM"] else "🐻" if fase in ["DIST", "BIG DIST"] else "⚪"
+
+        if row["score_accum"] >= 70:
+            score_emoji = "🏆"
+        elif row["score_accum"] >= 55:
+            score_emoji = "🔥"
+        elif row["score_accum"] >= 40:
+            score_emoji = "⭐"
+        else:
+            score_emoji = "▫️"
+
+        if row["rvol"] >= 250:
+            rvol_emoji = "💥"
+        elif row["rvol"] >= 150:
+            rvol_emoji = "⚡"
+        elif row["rvol"] >= 100:
+            rvol_emoji = "🔋"
+        else:
+            rvol_emoji = "🔹"
+
+        lines.append(f"<b>{i}. {signal_emoji} {row['symbol']}</b>")
+        lines.append(
+            f"💰 <b>{fmt_price(row['now'])}</b> | "
+            f"🎯 <b>{fmt_price(row['entry'])}</b> | "
+            f"🏁 <b>{fmt_price(row['tp'])}</b> | "
+            f"🛑 <b>{fmt_price(row['sl'])}</b>"
+        )
+        lines.append(
+            f"{score_emoji} Akum <b>{int(row['score_accum'])}</b> | "
+            f"🧠 Total <b>{int(row['score_total'])}</b> | "
+            f"{rvol_emoji} RVOL <b>{fmt_pct(row['rvol'])}</b>"
+        )
+        lines.append(
+            f"⚡ Scalp <b>{int(row['score_scalping'])}</b> | "
+            f"🎯 BSJP <b>{int(row['score_bsjp'])}</b> | "
+            f"📈 Swing <b>{int(row['score_swing'])}</b> | "
+            f"🏦 Bandar <b>{int(row['score_bandar'])}</b>"
+        )
+        lines.append(
+            f"📍 <b>{row['sinyal']}</b> | "
+            f"{trend_emoji} <b>{row['trend']}</b> | "
+            f"{fase_emoji} <b>{row['fase']}</b>"
+        )
+        lines.append(
+            f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | "
+            f"RSI <b>{rsi_cell_text(row['rsi'])}</b> | "
+            f"RSI 5M <b>{rsi_cell_text(row['rsi_5m'])}</b>"
+        )
+        lines.append("────────────")
+
+    return "\n".join(lines)
+
+
+def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
+    if df.empty:
+        return "📭 <b>Tidak ada alert kuat</b>"
+
+    scan_time = st.session_state.get(
+        "last_run",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    picked = df.head(top_n)
+    lines = []
+    lines.append("🚨 <b>ALERT KUAT</b>")
+    lines.append(f"🕒 <b>{scan_time}</b>")
     lines.append("")
-    lines.append("Filter: fokus akumulasi + RVOL tinggi")
+
+    for i, (_, row) in enumerate(picked.iterrows(), start=1):
+        signal = str(row["sinyal"]).upper()
+        trend = str(row["trend"]).upper()
+        fase = str(row["fase"]).upper()
+
+        if signal == "SUPER":
+            signal_emoji = "🚀"
+        elif signal in ["AKUM", "ON TRACK", "HAKA", "GC NOW"]:
+            signal_emoji = "✅"
+        elif signal == "REBOUND":
+            signal_emoji = "🔄"
+        elif signal in ["DIST", "WASPADA OB"]:
+            signal_emoji = "⚠️"
+        else:
+            signal_emoji = "⏳"
+
+        trend_emoji = "📈" if trend == "BULL" else "📉" if trend == "BEAR" else "➡️"
+        fase_emoji = "🐂" if fase in ["AKUM", "BIG AKUM"] else "🐻" if fase in ["DIST", "BIG DIST"] else "⚪"
+
+        lines.append(f"<b>{i}. {signal_emoji} {row['symbol']}</b>")
+        lines.append(
+            f"💰 <b>{fmt_price(row['now'])}</b> | "
+            f"🎯 <b>{fmt_price(row['entry'])}</b> | "
+            f"🏁 <b>{fmt_price(row['tp'])}</b> | "
+            f"🛑 <b>{fmt_price(row['sl'])}</b>"
+        )
+        lines.append(
+            f"🏆 Akum <b>{int(row['score_accum'])}</b> | "
+            f"🧠 Total <b>{int(row['score_total'])}</b> | "
+            f"⚡ RVOL <b>{fmt_pct(row['rvol'])}</b>"
+        )
+        lines.append(
+            f"⚡ Scalp <b>{int(row['score_scalping'])}</b> | "
+            f"🎯 BSJP <b>{int(row['score_bsjp'])}</b> | "
+            f"📈 Swing <b>{int(row['score_swing'])}</b> | "
+            f"🏦 Bandar <b>{int(row['score_bandar'])}</b>"
+        )
+        lines.append(
+            f"📍 <b>{row['sinyal']}</b> | "
+            f"{trend_emoji} <b>{row['trend']}</b> | "
+            f"{fase_emoji} <b>{row['fase']}</b>"
+        )
+        lines.append(
+            f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | "
+            f"RSI <b>{rsi_cell_text(row['rsi'])}</b>"
+        )
+        lines.append("────────────")
+
     return "\n".join(lines)
 
 
@@ -175,6 +301,116 @@ def build_telegram_alerts(df: pd.DataFrame):
         ["score_accum", "score_total", "rvol", "gain"],
         ascending=[False, False, False, False]
     ).reset_index(drop=True)
+
+
+# =========================================================
+# SIDEBAR TELEGRAM
+# =========================================================
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("Telegram Bot")
+
+    telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
+    telegram_bot_token = st.text_input("Bot Token", type="password")
+    telegram_chat_id = st.text_input("Chat ID")
+    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=5, step=1)
+    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=False)
+    send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
+
+    if send_test_btn:
+        now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        test_message = (
+            "🤖 <b>Test Notifikasi Berhasil</b>\n"
+            "✅ Bot Telegram sudah terhubung ke screener.\n\n"
+            f"🕒 <b>Waktu:</b> {now_text}\n"
+            "📡 <b>Status:</b> ONLINE\n"
+            "🔥 Sistem siap mengirim alert saham."
+        )
+
+        ok, msg = send_telegram_message(
+            telegram_bot_token,
+            telegram_chat_id,
+            test_message
+        )
+        if ok:
+            st.success("Pesan test berhasil dikirim.")
+        else:
+            st.error(f"Gagal kirim test: {msg}")
+
+
+# =========================================================
+# AUTO TELEGRAM NOTIF (ANTI SPAM)
+# =========================================================
+if (
+    telegram_enabled
+    and auto_refresh
+    and telegram_bot_token
+    and telegram_chat_id
+    and not display_df.empty
+):
+    source_df = alert_df.head(5) if send_only_alerts else display_df.head(5)
+
+    current_alert_key = "|".join(
+        [
+            f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}"
+            for _, row in source_df.iterrows()
+        ]
+    )
+
+    last_alert_key = st.session_state.get("last_alert_key", "")
+
+    if current_alert_key != last_alert_key:
+        if send_only_alerts:
+            message = build_telegram_strong_alert_message(
+                source_df,
+                top_n=5
+            )
+        else:
+            message = build_telegram_watchlist_message(
+                source_df,
+                top_n=5
+            )
+
+        ok, msg = send_telegram_message(
+            telegram_bot_token,
+            telegram_chat_id,
+            message
+        )
+
+        if ok:
+            st.session_state["last_alert_key"] = current_alert_key
+            st.success("Auto notif Telegram terkirim")
+        else:
+            st.warning(f"Gagal auto notif: {msg}")
+
+
+# =========================================================
+# KIRIM MANUAL
+# =========================================================
+if telegram_enabled and send_now_btn:
+    if send_only_alerts:
+        target_df = alert_df.head(5)
+        message = build_telegram_strong_alert_message(
+            target_df,
+            top_n=5
+        )
+    else:
+        target_df = display_df.head(5)
+        message = build_telegram_watchlist_message(
+            target_df,
+            top_n=5
+        )
+
+    ok, msg = send_telegram_message(
+        telegram_bot_token,
+        telegram_chat_id,
+        message
+    )
+
+    if ok:
+        st.success("5 emiten terbaik berhasil dikirim ke Telegram.")
+    else:
+        st.error(f"Gagal kirim Telegram: {msg}")
 
 # =========================================================
 # HELPERS
