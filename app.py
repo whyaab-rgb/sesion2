@@ -1236,6 +1236,7 @@ with st.sidebar:
 
     if send_test_btn:
     now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
     test_message = (
         "🤖 <b>Test Notifikasi Berhasil</b>\n"
         "✅ Bot Telegram sudah terhubung ke screener.\n\n"
@@ -1249,6 +1250,7 @@ with st.sidebar:
         telegram_chat_id,
         test_message
     )
+
     if ok:
         st.success("Pesan test berhasil dikirim.")
     else:
