@@ -8,6 +8,102 @@ import yfinance as yf
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
 
+# =========================
+# TELEGRAM UPGRADE (OVERRIDE)
+# =========================
+
+def build_telegram_watchlist_message(df, top_n=10):
+    if df.empty:
+        return "📭 Tidak ada saham"
+
+    scan_time = st.session_state.get(
+        "last_run",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    df = df.head(top_n)
+
+    lines = []
+    lines.append("🚨 <b>HIGH PROB SCREENER</b>")
+    lines.append(f"🕒 <b>{scan_time}</b>")
+    lines.append("")
+
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+
+        # ===== EMOJI =====
+        signal = str(row["sinyal"]).upper()
+
+        if signal == "SUPER":
+            emoji = "🚀"
+        elif signal in ["AKUM", "ON TRACK"]:
+            emoji = "✅"
+        elif signal == "REBOUND":
+            emoji = "🔄"
+        else:
+            emoji = "⚠️"
+
+        trend_emoji = "📈" if row["trend"] == "BULL" else "📉"
+
+        # ===== OUTPUT =====
+        lines.append(f"<b>{i}. {emoji} {row['symbol']}</b>")
+
+        lines.append(
+            f"💰 {fmt_price(row['now'])} | 🎯 {fmt_price(row['entry'])} | "
+            f"🏁 {fmt_price(row['tp'])} | 🛑 {fmt_price(row['sl'])}"
+        )
+
+        lines.append(
+            f"🏆 Akum {int(row['score_accum'])} | "
+            f"🧠 Total {int(row['score_total'])} | "
+            f"⚡ RVOL {fmt_pct(row['rvol'])}"
+        )
+
+        lines.append(
+            f"⚡ Scalp {int(row['score_scalping'])} | "
+            f"🎯 BSJP {int(row['score_bsjp'])} | "
+            f"📈 Swing {int(row['score_swing'])} | "
+            f"🏦 Bandar {int(row['score_bandar'])}"
+        )
+
+        lines.append(
+            f"📍 {row['sinyal']} | {trend_emoji} {row['trend']} | 🐂 {row['fase']}"
+        )
+
+        lines.append(
+            f"📊 Gain {fmt_pct(row['gain'])} | RSI {rsi_cell_text(row['rsi'])}"
+        )
+
+        lines.append("────────────")
+
+    return "\n".join(lines)
+
+
+def build_telegram_strong_alert_message(df, top_n=5):
+    if df.empty:
+        return "📭 Tidak ada alert kuat"
+
+    scan_time = st.session_state.get(
+        "last_run",
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    df = df.head(top_n)
+
+    lines = []
+    lines.append("🚨 <b>ALERT KUAT</b>")
+    lines.append(f"🕒 <b>{scan_time}</b>")
+    lines.append("")
+
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        lines.append(
+            f"{i}. 🚀 <b>{row['symbol']}</b> | "
+            f"{fmt_price(row['now'])} | "
+            f"🏆 {int(row['score_accum'])} | "
+            f"⚡ {fmt_pct(row['rvol'])}"
+        )
+
+    return "\n".join(lines)
+
 st.set_page_config(page_title="High Prob Screener", layout="wide")
 
 # =========================================================
@@ -1126,10 +1222,16 @@ if (
     last_alert_key = st.session_state.get("last_alert_key", "")
 
     if current_alert_key != last_alert_key:
-        message = build_telegram_watchlist_message(
-            alert_df,
-            top_n=min(int(telegram_top_n), len(alert_df))
-        )
+        if send_only_alerts:
+    message = build_telegram_strong_alert_message(
+        alert_df,
+        top_n=min(int(telegram_top_n), len(alert_df))
+    )
+else:
+    message = build_telegram_watchlist_message(
+        alert_df,
+        top_n=min(int(telegram_top_n), len(alert_df))
+    )
 
         ok, msg = send_telegram_message(
             telegram_bot_token,
@@ -1166,8 +1268,17 @@ with cbtn2:
     st.metric("Jumlah Alert Kuat", len(alert_df))
 
 if telegram_enabled and send_now_btn:
-    target_df = alert_df if send_only_alerts else display_df.head(int(telegram_top_n))
-    message = build_telegram_watchlist_message(target_df, top_n=int(telegram_top_n))
+
+    if send_only_alerts:
+        message = build_telegram_strong_alert_message(
+            alert_df,
+            top_n=int(telegram_top_n)
+        )
+    else:
+        message = build_telegram_watchlist_message(
+            display_df,
+            top_n=int(telegram_top_n)
+        )
     ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
 
     if ok:
