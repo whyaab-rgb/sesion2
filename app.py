@@ -1,3 +1,4 @@
+import requests
 import textwrap
 from datetime import datetime
 import numpy as np
@@ -93,12 +94,6 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {
     font-size: 12px;
     color: #9db1cc !important;
 }
-.metric-box {
-    background:#0d1a29;
-    border:1px solid #17324d;
-    border-radius:12px;
-    padding:10px;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,6 +111,70 @@ def auto_refresh_fragment(seconds: int):
         """,
         unsafe_allow_html=True
     )
+
+# =========================================================
+# TELEGRAM
+# =========================================================
+def send_telegram_message(bot_token: str, chat_id: str, message: str):
+    if not bot_token or not chat_id:
+        return False, "Bot token / chat_id kosong"
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code == 200:
+            return True, "Terkirim"
+        return False, f"HTTP {r.status_code}: {r.text}"
+    except Exception as e:
+        return False, str(e)
+
+
+def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 10):
+    if df.empty:
+        return "Tidak ada saham yang lolos filter."
+
+    picked = df.head(top_n)
+    lines = []
+    lines.append("<b>🔥 Top Saham Akumulasi</b>")
+    lines.append("")
+
+    for i, (_, row) in enumerate(picked.iterrows(), start=1):
+        lines.append(
+            f"{i}. <b>{row['symbol']}</b> | "
+            f"Price: {fmt_price(row['now'])} | "
+            f"Akum: <b>{int(row['score_accum'])}</b> | "
+            f"Total: {int(row['score_total'])} | "
+            f"RVOL: {fmt_pct(row['rvol'])} | "
+            f"Signal: {row['sinyal']} | "
+            f"Trend: {row['trend']}"
+        )
+
+    lines.append("")
+    lines.append("Filter: fokus akumulasi + RVOL tinggi")
+    return "\n".join(lines)
+
+
+def build_telegram_alerts(df: pd.DataFrame):
+    if df.empty:
+        return pd.DataFrame()
+
+    alert_df = df[
+        (df["score_accum"] >= 60) &
+        (df["rvol"] >= 150) &
+        (df["sinyal"].isin(["SUPER", "ON TRACK", "AKUM", "HAKA"]))
+    ].copy()
+
+    return alert_df.sort_values(
+        ["score_accum", "score_total", "rvol", "gain"],
+        ascending=[False, False, False, False]
+    ).reset_index(drop=True)
 
 # =========================================================
 # HELPERS
@@ -593,21 +652,18 @@ def run_screener(symbols, period, interval, max_price=1000):
             intra5 = get_intraday_5m(symbol)
             row = build_row(symbol, daily, intra5)
 
-            if row is not None:
-                if not pd.isna(row["now"]) and row["now"] <= max_price:
-                    rows.append(row)
+            if row is not None and not pd.isna(row["now"]) and row["now"] <= max_price:
+                rows.append(row)
         except Exception:
             continue
 
     if not rows:
         return pd.DataFrame()
 
-    out = pd.DataFrame(rows).sort_values(
+    return pd.DataFrame(rows).sort_values(
         ["score_accum", "score_total", "rvol", "gain"],
         ascending=[False, False, False, False]
     ).reset_index(drop=True)
-
-    return out
 
 # =========================================================
 # CELL COLORS
@@ -942,7 +998,7 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
 # =========================================================
 st.title("HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI")
 st.markdown(
-    '<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh tersedia</div>',
+    '<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh + telegram bot</div>',
     unsafe_allow_html=True
 )
 
@@ -964,6 +1020,27 @@ with st.sidebar:
         value=default_symbols_text,
         height=160
     )
+
+    st.markdown("---")
+    st.subheader("Telegram Bot")
+
+    telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
+    telegram_bot_token = st.text_input("Bot Token", type="password")
+    telegram_chat_id = st.text_input("Chat ID")
+    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=10, step=1)
+    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=True)
+    send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
+
+    if send_test_btn:
+        ok, msg = send_telegram_message(
+            telegram_bot_token,
+            telegram_chat_id,
+            "<b>Test notifikasi berhasil</b>\nBot Telegram sudah terhubung ke screener."
+        )
+        if ok:
+            st.success("Pesan test berhasil dikirim.")
+        else:
+            st.error(f"Gagal kirim test: {msg}")
 
     st.markdown("---")
     st.subheader("Search Emiten Mandiri")
@@ -1029,6 +1106,43 @@ display_df = screener_df.sort_values(
     ascending=[False, False, False, False]
 ).head(TOP_N).reset_index(drop=True)
 
+alert_df = build_telegram_alerts(display_df)
+
+# AUTO TELEGRAM NOTIF (ANTI SPAM)
+if (
+    telegram_enabled
+    and auto_refresh
+    and telegram_bot_token
+    and telegram_chat_id
+    and not alert_df.empty
+):
+    current_alert_key = "|".join(
+        [
+            f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}"
+            for _, row in alert_df.head(10).iterrows()
+        ]
+    )
+
+    last_alert_key = st.session_state.get("last_alert_key", "")
+
+    if current_alert_key != last_alert_key:
+        message = build_telegram_watchlist_message(
+            alert_df,
+            top_n=min(int(telegram_top_n), len(alert_df))
+        )
+
+        ok, msg = send_telegram_message(
+            telegram_bot_token,
+            telegram_chat_id,
+            message
+        )
+
+        if ok:
+            st.session_state["last_alert_key"] = current_alert_key
+            st.success("Auto notif Telegram terkirim")
+        else:
+            st.warning(f"Gagal auto notif: {msg}")
+
 # =========================================================
 # TOP METRICS
 # =========================================================
@@ -1036,7 +1150,6 @@ top_symbol = display_df.iloc[0]["symbol"]
 top_accum = int(display_df.iloc[0]["score_accum"])
 top_score = int(display_df.iloc[0]["score_total"])
 top_signal = display_df.iloc[0]["sinyal"]
-top_phase = display_df.iloc[0]["fase"]
 last_run = st.session_state.get("last_run", "-")
 
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -1045,6 +1158,22 @@ m2.metric("AKUM SCORE", top_accum)
 m3.metric("TOTAL SCORE", top_score)
 m4.metric("SIGNAL", top_signal)
 m5.metric("LAST SCAN", last_run)
+
+cbtn1, cbtn2 = st.columns(2)
+with cbtn1:
+    send_now_btn = st.button("Kirim Notifikasi Telegram", use_container_width=True)
+with cbtn2:
+    st.metric("Jumlah Alert Kuat", len(alert_df))
+
+if telegram_enabled and send_now_btn:
+    target_df = alert_df if send_only_alerts else display_df.head(int(telegram_top_n))
+    message = build_telegram_watchlist_message(target_df, top_n=int(telegram_top_n))
+    ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
+
+    if ok:
+        st.success("Notifikasi Telegram berhasil dikirim.")
+    else:
+        st.error(f"Gagal kirim Telegram: {msg}")
 
 # =========================================================
 # MAIN TABLE
@@ -1060,6 +1189,24 @@ components.html(
     height=560,
     scrolling=True
 )
+
+# =========================================================
+# ALERT TABLE
+# =========================================================
+st.subheader("🚨 Alert Kuat (Siap Kirim Telegram)")
+
+if alert_df.empty:
+    st.info("Belum ada saham dengan kriteria akumulasi kuat.")
+else:
+    st.dataframe(
+        alert_df[[
+            "symbol", "now", "gain", "rvol", "rsi",
+            "fase", "trend", "sinyal",
+            "score_accum", "score_total"
+        ]],
+        use_container_width=True,
+        height=260
+    )
 
 # =========================================================
 # RANKING TABLE
