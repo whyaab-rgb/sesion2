@@ -242,8 +242,7 @@ def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
         )
         lines.append("────────────")
 
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
@@ -297,8 +296,7 @@ def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
         lines.append(f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | RSI <b>{rsi_cell_text(row['rsi'])}</b>")
         lines.append("────────────")
 
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 def build_telegram_alerts(df: pd.DataFrame):
