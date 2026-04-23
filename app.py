@@ -1232,6 +1232,11 @@ else:
         alert_df,
         top_n=min(int(telegram_top_n), len(alert_df))
     )
+else:
+    message = build_telegram_watchlist_message(
+        alert_df,
+        top_n=min(int(telegram_top_n), len(alert_df))
+    )
 
         ok, msg = send_telegram_message(
             telegram_bot_token,
