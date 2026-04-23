@@ -1228,13 +1228,13 @@ with st.sidebar:
     st.subheader("Telegram Bot")
 
     telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
-    telegram_bot_token = st.text_input("Bot Token", type="password")
-    telegram_chat_id = st.text_input("Chat ID")
-    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=10, step=1)
-    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=True)
-    send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
+telegram_bot_token = st.text_input("Bot Token", type="password")
+telegram_chat_id = st.text_input("Chat ID")
+telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=10, step=1)
+send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=True)
+send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
 
-    if send_test_btn:
+if send_test_btn:
     now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
     test_message = (
