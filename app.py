@@ -59,7 +59,6 @@ SYMBOLS = [
 
 MAX_PRICE = 1000
 TOP_N = 30
-
 WATCHLISTS = {
     "IDX Top 100": SYMBOLS[:100],
     "IDX Top 300": SYMBOLS[:300],
@@ -113,6 +112,58 @@ def auto_refresh_fragment(seconds: int):
     )
 
 # =========================================================
+# HELPERS
+# =========================================================
+def normalize_jk_symbol(symbol: str) -> str:
+    s = symbol.strip().upper()
+    if not s:
+        return ""
+    if ":" in s:
+        return s
+    if not s.endswith(".JK"):
+        s = f"{s}.JK"
+    return s
+
+
+def latest(series: pd.Series) -> float:
+    try:
+        return float(series.iloc[-1])
+    except Exception:
+        return np.nan
+
+
+def fmt_price(v):
+    if pd.isna(v):
+        return "-"
+    if v >= 100:
+        return f"{v:,.0f}"
+    return f"{v:,.2f}"
+
+
+def fmt_pct(v):
+    if pd.isna(v):
+        return "-"
+    return f"{v:.1f}%"
+
+
+def rsi_cell_text(v):
+    if pd.isna(v):
+        return "-"
+    return f"{v:.1f}"
+
+
+def human_value(v):
+    if pd.isna(v):
+        return "-"
+    if v >= 1_000_000_000_000:
+        return f"{v / 1_000_000_000_000:.1f}T"
+    if v >= 1_000_000_000:
+        return f"{v / 1_000_000_000:.1f}B"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    return f"{v:,.0f}"
+
+# =========================================================
 # TELEGRAM
 # =========================================================
 def send_telegram_message(bot_token: str, chat_id: str, message: str):
@@ -140,16 +191,9 @@ def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
     if df.empty:
         return "📭 <b>Tidak ada saham yang lolos filter</b>"
 
-    scan_time = st.session_state.get(
-        "last_run",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-
+    scan_time = st.session_state.get("last_run", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     picked = df.head(top_n)
-    lines = []
-    lines.append("🚨 <b>HIGH PROB SCREENER</b>")
-    lines.append(f"🕒 <b>{scan_time}</b>")
-    lines.append("")
+    lines = ["🚨 <b>HIGH PROB SCREENER</b>", f"🕒 <b>{scan_time}</b>", ""]
 
     for i, (_, row) in enumerate(picked.iterrows(), start=1):
         signal = str(row["sinyal"]).upper()
@@ -169,24 +213,8 @@ def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
 
         trend_emoji = "📈" if trend == "BULL" else "📉" if trend == "BEAR" else "➡️"
         fase_emoji = "🐂" if fase in ["AKUM", "BIG AKUM"] else "🐻" if fase in ["DIST", "BIG DIST"] else "⚪"
-
-        if row["score_accum"] >= 70:
-            score_emoji = "🏆"
-        elif row["score_accum"] >= 55:
-            score_emoji = "🔥"
-        elif row["score_accum"] >= 40:
-            score_emoji = "⭐"
-        else:
-            score_emoji = "▫️"
-
-        if row["rvol"] >= 250:
-            rvol_emoji = "💥"
-        elif row["rvol"] >= 150:
-            rvol_emoji = "⚡"
-        elif row["rvol"] >= 100:
-            rvol_emoji = "🔋"
-        else:
-            rvol_emoji = "🔹"
+        score_emoji = "🏆" if row["score_accum"] >= 70 else "🔥" if row["score_accum"] >= 55 else "⭐" if row["score_accum"] >= 40 else "▫️"
+        rvol_emoji = "💥" if row["rvol"] >= 250 else "⚡" if row["rvol"] >= 150 else "🔋" if row["rvol"] >= 100 else "🔹"
 
         lines.append(f"<b>{i}. {signal_emoji} {row['symbol']}</b>")
         lines.append(
@@ -207,34 +235,24 @@ def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
             f"🏦 Bandar <b>{int(row['score_bandar'])}</b>"
         )
         lines.append(
-            f"📍 <b>{row['sinyal']}</b> | "
-            f"{trend_emoji} <b>{row['trend']}</b> | "
-            f"{fase_emoji} <b>{row['fase']}</b>"
+            f"📍 <b>{row['sinyal']}</b> | {trend_emoji} <b>{row['trend']}</b> | {fase_emoji} <b>{row['fase']}</b>"
         )
         lines.append(
-            f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | "
-            f"RSI <b>{rsi_cell_text(row['rsi'])}</b> | "
-            f"RSI 5M <b>{rsi_cell_text(row['rsi_5m'])}</b>"
+            f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | RSI <b>{rsi_cell_text(row['rsi'])}</b> | RSI 5M <b>{rsi_cell_text(row['rsi_5m'])}</b>"
         )
         lines.append("────────────")
 
-    return "\n".join(lines)
+    return "
+".join(lines)
 
 
 def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
     if df.empty:
         return "📭 <b>Tidak ada alert kuat</b>"
 
-    scan_time = st.session_state.get(
-        "last_run",
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-
+    scan_time = st.session_state.get("last_run", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     picked = df.head(top_n)
-    lines = []
-    lines.append("🚨 <b>ALERT KUAT</b>")
-    lines.append(f"🕒 <b>{scan_time}</b>")
-    lines.append("")
+    lines = ["🚨 <b>ALERT KUAT</b>", f"🕒 <b>{scan_time}</b>", ""]
 
     for i, (_, row) in enumerate(picked.iterrows(), start=1):
         signal = str(row["sinyal"]).upper()
@@ -274,17 +292,13 @@ def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
             f"🏦 Bandar <b>{int(row['score_bandar'])}</b>"
         )
         lines.append(
-            f"📍 <b>{row['sinyal']}</b> | "
-            f"{trend_emoji} <b>{row['trend']}</b> | "
-            f"{fase_emoji} <b>{row['fase']}</b>"
+            f"📍 <b>{row['sinyal']}</b> | {trend_emoji} <b>{row['trend']}</b> | {fase_emoji} <b>{row['fase']}</b>"
         )
-        lines.append(
-            f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | "
-            f"RSI <b>{rsi_cell_text(row['rsi'])}</b>"
-        )
+        lines.append(f"📊 Gain <b>{fmt_pct(row['gain'])}</b> | RSI <b>{rsi_cell_text(row['rsi'])}</b>")
         lines.append("────────────")
 
-    return "\n".join(lines)
+    return "
+".join(lines)
 
 
 def build_telegram_alerts(df: pd.DataFrame):
@@ -297,167 +311,7 @@ def build_telegram_alerts(df: pd.DataFrame):
         (df["sinyal"].isin(["SUPER", "ON TRACK", "AKUM", "HAKA"]))
     ].copy()
 
-    return alert_df.sort_values(
-        ["score_accum", "score_total", "rvol", "gain"],
-        ascending=[False, False, False, False]
-    ).reset_index(drop=True)
-
-
-# =========================================================
-# SIDEBAR TELEGRAM
-# =========================================================
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("Telegram Bot")
-
-    telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
-    telegram_bot_token = st.text_input("Bot Token", type="password")
-    telegram_chat_id = st.text_input("Chat ID")
-    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=5, step=1)
-    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=False)
-    send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
-
-    if send_test_btn:
-        now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-        test_message = (
-            "🤖 <b>Test Notifikasi Berhasil</b>\n"
-            "✅ Bot Telegram sudah terhubung ke screener.\n\n"
-            f"🕒 <b>Waktu:</b> {now_text}\n"
-            "📡 <b>Status:</b> ONLINE\n"
-            "🔥 Sistem siap mengirim alert saham."
-        )
-
-        ok, msg = send_telegram_message(
-            telegram_bot_token,
-            telegram_chat_id,
-            test_message
-        )
-        if ok:
-            st.success("Pesan test berhasil dikirim.")
-        else:
-            st.error(f"Gagal kirim test: {msg}")
-
-
-# =========================================================
-# AUTO TELEGRAM NOTIF (ANTI SPAM)
-# =========================================================
-if (
-    telegram_enabled
-    and auto_refresh
-    and telegram_bot_token
-    and telegram_chat_id
-    and not display_df.empty
-):
-    source_df = alert_df.head(5) if send_only_alerts else display_df.head(5)
-
-    current_alert_key = "|".join(
-        [
-            f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}"
-            for _, row in source_df.iterrows()
-        ]
-    )
-
-    last_alert_key = st.session_state.get("last_alert_key", "")
-
-    if current_alert_key != last_alert_key:
-        if send_only_alerts:
-            message = build_telegram_strong_alert_message(
-                source_df,
-                top_n=5
-            )
-        else:
-            message = build_telegram_watchlist_message(
-                source_df,
-                top_n=5
-            )
-
-        ok, msg = send_telegram_message(
-            telegram_bot_token,
-            telegram_chat_id,
-            message
-        )
-
-        if ok:
-            st.session_state["last_alert_key"] = current_alert_key
-            st.success("Auto notif Telegram terkirim")
-        else:
-            st.warning(f"Gagal auto notif: {msg}")
-
-
-# =========================================================
-# KIRIM MANUAL
-# =========================================================
-if telegram_enabled and send_now_btn:
-    if send_only_alerts:
-        target_df = alert_df.head(5)
-        message = build_telegram_strong_alert_message(
-            target_df,
-            top_n=5
-        )
-    else:
-        target_df = display_df.head(5)
-        message = build_telegram_watchlist_message(
-            target_df,
-            top_n=5
-        )
-
-    ok, msg = send_telegram_message(
-        telegram_bot_token,
-        telegram_chat_id,
-        message
-    )
-
-    if ok:
-        st.success("5 emiten terbaik berhasil dikirim ke Telegram.")
-    else:
-        st.error(f"Gagal kirim Telegram: {msg}")
-
-# =========================================================
-# HELPERS
-# =========================================================
-def normalize_jk_symbol(symbol: str) -> str:
-    s = symbol.strip().upper()
-    if not s:
-        return ""
-    if ":" in s:
-        return s
-    if not s.endswith(".JK"):
-        s = f"{s}.JK"
-    return s
-
-def latest(series: pd.Series) -> float:
-    try:
-        return float(series.iloc[-1])
-    except Exception:
-        return np.nan
-
-def fmt_price(v):
-    if pd.isna(v):
-        return "-"
-    if v >= 100:
-        return f"{v:,.0f}"
-    return f"{v:,.2f}"
-
-def fmt_pct(v):
-    if pd.isna(v):
-        return "-"
-    return f"{v:.1f}%"
-
-def rsi_cell_text(v):
-    if pd.isna(v):
-        return "-"
-    return f"{v:.1f}"
-
-def human_value(v):
-    if pd.isna(v):
-        return "-"
-    if v >= 1_000_000_000_000:
-        return f"{v / 1_000_000_000_000:.1f}T"
-    if v >= 1_000_000_000:
-        return f"{v / 1_000_000_000:.1f}B"
-    if v >= 1_000_000:
-        return f"{v / 1_000_000:.1f}M"
-    return f"{v:,.0f}"
+    return alert_df.sort_values(["score_accum", "score_total", "rvol", "gain"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 # =========================================================
 # DATA SOURCE
@@ -465,26 +319,15 @@ def human_value(v):
 @st.cache_data(ttl=300)
 def get_ohlcv(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.DataFrame:
     try:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval=interval,
-            auto_adjust=False,
-            progress=False,
-            threads=False
-        )
-
+        df = yf.download(symbol, period=period, interval=interval, auto_adjust=False, progress=False, threads=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
         if df.empty:
             return pd.DataFrame()
-
         required = ["Open", "High", "Low", "Close", "Volume"]
         for col in required:
             if col not in df.columns:
                 return pd.DataFrame()
-
         return df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
     except Exception:
         return pd.DataFrame()
@@ -493,21 +336,11 @@ def get_ohlcv(symbol: str, period: str = "6mo", interval: str = "1d") -> pd.Data
 @st.cache_data(ttl=300)
 def get_intraday_5m(symbol: str) -> pd.DataFrame:
     try:
-        df = yf.download(
-            symbol,
-            period="5d",
-            interval="5m",
-            auto_adjust=False,
-            progress=False,
-            threads=False
-        )
-
+        df = yf.download(symbol, period="5d", interval="5m", auto_adjust=False, progress=False, threads=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
         if df.empty:
             return pd.DataFrame()
-
         return df.dropna().copy()
     except Exception:
         return pd.DataFrame()
@@ -517,12 +350,10 @@ def get_intraday_5m(symbol: str) -> pd.DataFrame:
 # =========================================================
 def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy()
-
     x["MA5"] = x["Close"].rolling(5).mean()
     x["MA10"] = x["Close"].rolling(10).mean()
     x["MA20"] = x["Close"].rolling(20).mean()
     x["MA50"] = x["Close"].rolling(50).mean()
-
     x["EMA9"] = x["Close"].ewm(span=9, adjust=False).mean()
     x["EMA20"] = x["Close"].ewm(span=20, adjust=False).mean()
 
@@ -547,7 +378,6 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     x["VOL_MA5"] = x["Volume"].rolling(5).mean()
     x["VOL_MA20"] = x["Volume"].rolling(20).mean()
-
     x["SUPPORT20"] = x["Low"].rolling(20).min()
     x["RESIST20"] = x["High"].rolling(20).max()
 
@@ -561,12 +391,10 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
     upper_wick = x["High"] - x[["Open", "Close"]].max(axis=1)
     lower_wick = x[["Open", "Close"]].min(axis=1) - x["Low"]
     candle_range = (x["High"] - x["Low"]).replace(0, np.nan)
-
     x["BODY"] = body
     x["UPPER_WICK"] = upper_wick.clip(lower=0)
     x["LOWER_WICK"] = lower_wick.clip(lower=0)
     x["WICK_PCT"] = ((x["UPPER_WICK"] + x["LOWER_WICK"]) / candle_range) * 100
-
     return x
 
 # =========================================================
@@ -575,17 +403,14 @@ def calc_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def get_phase(df: pd.DataFrame) -> str:
     recent = df.tail(10)
     score = 0
-
     for _, row in recent.iterrows():
         vol_ma20 = row.get("VOL_MA20", np.nan)
         if pd.isna(vol_ma20) or vol_ma20 <= 0:
             continue
-
         if row["Close"] > row["Open"] and row["Volume"] > vol_ma20:
             score += 1
         elif row["Close"] < row["Open"] and row["Volume"] > vol_ma20:
             score -= 1
-
     if score >= 4:
         return "BIG AKUM"
     if score >= 2:
@@ -735,17 +560,11 @@ def compute_scores(df: pd.DataFrame):
     if close_ > ma20:
         bandar += 1
 
-    return {
-        "scalping": scalping,
-        "bsjp": bsjp,
-        "swing": swing,
-        "bandar": bandar
-    }
+    return {"scalping": scalping, "bsjp": bsjp, "swing": swing, "bandar": bandar}
 
 
 def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain):
     score = 0
-
     if not pd.isna(rvol):
         if rvol >= 250:
             score += 30
@@ -755,7 +574,6 @@ def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain)
             score += 18
         elif rvol >= 100:
             score += 10
-
     if not pd.isna(val):
         if val >= 100_000_000_000:
             score += 20
@@ -765,18 +583,15 @@ def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain)
             score += 10
         elif val >= 10_000_000_000:
             score += 6
-
     if not pd.isna(close_) and not pd.isna(ma20) and close_ > ma20:
         score += 8
     if not pd.isna(ma20) and not pd.isna(ma50) and ma20 > ma50:
         score += 8
-
     if not pd.isna(rsi):
         if 52 <= rsi <= 68:
             score += 10
         elif 45 <= rsi < 52:
             score += 5
-
     if phase == "BIG AKUM":
         score += 15
     elif phase == "AKUM":
@@ -785,16 +600,13 @@ def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain)
         score -= 8
     elif phase == "BIG DIST":
         score -= 15
-
     if signal in ["SUPER", "ON TRACK", "AKUM", "HAKA"]:
         score += 10
-
     if not pd.isna(gain):
         if gain > 0:
             score += 4
         elif gain < -3:
             score -= 5
-
     return max(score, 0)
 
 # =========================================================
@@ -878,28 +690,20 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
 @st.cache_data(ttl=300)
 def run_screener(symbols, period, interval, max_price=1000):
     rows = []
-
     for symbol in symbols:
         try:
             daily = get_ohlcv(symbol, period=period, interval=interval)
             if daily.empty:
                 continue
-
             intra5 = get_intraday_5m(symbol)
             row = build_row(symbol, daily, intra5)
-
             if row is not None and not pd.isna(row["now"]) and row["now"] <= max_price:
                 rows.append(row)
         except Exception:
             continue
-
     if not rows:
         return pd.DataFrame()
-
-    return pd.DataFrame(rows).sort_values(
-        ["score_accum", "score_total", "rvol", "gain"],
-        ascending=[False, False, False, False]
-    ).reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values(["score_accum", "score_total", "rvol", "gain"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 # =========================================================
 # CELL COLORS
@@ -915,6 +719,7 @@ def bg_gain(v):
         return "#dc2626"
     return "#991b1b"
 
+
 def bg_wick(v):
     if pd.isna(v):
         return "#243244"
@@ -926,30 +731,16 @@ def bg_wick(v):
         return "#d97706"
     return "#dc2626"
 
+
 def bg_aksi(v):
-    mapping = {
-        "AT ENTRY": "#1d4ed8",
-        "WATCH": "#b45309",
-        "WAIT GC": "#374151",
-        "HOLD": "#2563eb",
-        "SIAP BELI": "#7c3aed",
-        "WASPADA OB": "#d97706"
-    }
+    mapping = {"AT ENTRY": "#1d4ed8", "WATCH": "#b45309", "WAIT GC": "#374151", "HOLD": "#2563eb", "SIAP BELI": "#7c3aed", "WASPADA OB": "#d97706"}
     return mapping.get(v, "#334155")
 
+
 def bg_sinyal(v):
-    mapping = {
-        "ON TRACK": "#16a34a",
-        "REBOUND": "#d97706",
-        "AKUM": "#15803d",
-        "DIST": "#b91c1c",
-        "SUPER": "#7e22ce",
-        "HAKA": "#14b8a6",
-        "GC NOW": "#9333ea",
-        "WASPADA OB": "#ea580c",
-        "WAIT": "#111827"
-    }
+    mapping = {"ON TRACK": "#16a34a", "REBOUND": "#d97706", "AKUM": "#15803d", "DIST": "#b91c1c", "SUPER": "#7e22ce", "HAKA": "#14b8a6", "GC NOW": "#9333ea", "WASPADA OB": "#ea580c", "WAIT": "#111827"}
     return mapping.get(v, "#334155")
+
 
 def bg_rvol(v):
     if pd.isna(v):
@@ -962,14 +753,11 @@ def bg_rvol(v):
         return "#2563eb"
     return "#374151"
 
+
 def bg_price(kind):
-    mapping = {
-        "entry": "#1d4ed8",
-        "now": "#2563eb",
-        "tp": "#16a34a",
-        "sl": "#b91c1c"
-    }
+    mapping = {"entry": "#1d4ed8", "now": "#2563eb", "tp": "#16a34a", "sl": "#b91c1c"}
     return mapping.get(kind, "#243244")
+
 
 def bg_profit(v):
     if pd.isna(v):
@@ -982,6 +770,7 @@ def bg_profit(v):
         return "#92400e"
     return "#b91c1c"
 
+
 def bg_to_tp(v):
     if pd.isna(v):
         return "#243244"
@@ -991,14 +780,11 @@ def bg_to_tp(v):
         return "#16a34a"
     return "#0f766e"
 
+
 def bg_rsi_sig(v):
-    mapping = {
-        "UP": "#16a34a",
-        "DEAD": "#dc2626",
-        "GOLDEN": "#7c3aed",
-        "WAIT": "#111827"
-    }
+    mapping = {"UP": "#16a34a", "DEAD": "#dc2626", "GOLDEN": "#7c3aed", "WAIT": "#111827"}
     return mapping.get(v, "#334155")
+
 
 def bg_rsi(v):
     if pd.isna(v):
@@ -1011,23 +797,16 @@ def bg_rsi(v):
         return "#2563eb"
     return "#7c3aed"
 
+
 def bg_fase(v):
-    mapping = {
-        "BIG AKUM": "#9333ea",
-        "AKUM": "#16a34a",
-        "NEUTRAL": "#374151",
-        "DIST": "#dc2626",
-        "BIG DIST": "#991b1b"
-    }
+    mapping = {"BIG AKUM": "#9333ea", "AKUM": "#16a34a", "NEUTRAL": "#374151", "DIST": "#dc2626", "BIG DIST": "#991b1b"}
     return mapping.get(v, "#334155")
 
+
 def bg_trend(v):
-    mapping = {
-        "BULL": "#16a34a",
-        "BEAR": "#dc2626",
-        "NEUTRAL": "#6b7280"
-    }
+    mapping = {"BULL": "#16a34a", "BEAR": "#dc2626", "NEUTRAL": "#6b7280"}
     return mapping.get(v, "#334155")
+
 
 def bg_accum_score(v):
     if pd.isna(v):
@@ -1190,29 +969,15 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
     st.subheader(f"Chart Detail: {symbol_name}")
 
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df["Open"],
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        name="Candlestick"
-    ))
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candlestick"))
     fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], mode="lines", name="MA20"))
     fig.add_trace(go.Scatter(x=df.index, y=df["MA50"], mode="lines", name="MA50"))
     fig.add_trace(go.Scatter(x=df.index, y=df["BB_UPPER"], mode="lines", name="BB Upper"))
     fig.add_trace(go.Scatter(x=df.index, y=df["BB_LOWER"], mode="lines", name="BB Lower"))
-
-    fig.update_layout(
-        height=520,
-        template="plotly_dark",
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
+    fig.update_layout(height=520, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=40, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
     c1, c2 = st.columns(2)
-
     with c1:
         fig_rsi = go.Figure()
         fig_rsi.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI"))
@@ -1220,7 +985,6 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
         fig_rsi.add_hline(y=30, line_dash="dash")
         fig_rsi.update_layout(height=280, template="plotly_dark", title="RSI")
         st.plotly_chart(fig_rsi, use_container_width=True)
-
     with c2:
         fig_macd = go.Figure()
         fig_macd.add_trace(go.Scatter(x=df.index, y=df["MACD"], mode="lines", name="MACD"))
@@ -1233,10 +997,7 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
 # HEADER
 # =========================================================
 st.title("HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI")
-st.markdown(
-    '<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh + telegram bot</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh + telegram bot</div>', unsafe_allow_html=True)
 
 # =========================================================
 # SIDEBAR
@@ -1251,28 +1012,32 @@ with st.sidebar:
     refresh_sec = st.selectbox("Refresh tiap", [30, 60, 120, 300], index=1)
 
     default_symbols_text = ",".join(WATCHLISTS[watchlist_name]) if watchlist_name != "Custom" else ""
-    custom_symbols = st.text_area(
-        "Daftar saham watchlist (pisahkan koma)",
-        value=default_symbols_text,
-        height=160
-    )
+    custom_symbols = st.text_area("Daftar saham watchlist (pisahkan koma)", value=default_symbols_text, height=160)
 
     st.markdown("---")
     st.subheader("Telegram Bot")
-
     telegram_enabled = st.checkbox("Aktifkan notifikasi Telegram", value=False)
     telegram_bot_token = st.text_input("Bot Token", type="password")
     telegram_chat_id = st.text_input("Chat ID")
-    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=10, step=1)
-    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=True)
+    telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=5, step=1)
+    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=False)
     send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
 
     if send_test_btn:
-        ok, msg = send_telegram_message(
-            telegram_bot_token,
-            telegram_chat_id,
-            "<b>Test notifikasi berhasil</b>\nBot Telegram sudah terhubung ke screener."
+        now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        test_message = (
+            "🤖 <b>Test Notifikasi Berhasil</b>
+"
+            "✅ Bot Telegram sudah terhubung ke screener.
+
+"
+            f"🕒 <b>Waktu:</b> {now_text}
+"
+            "📡 <b>Status:</b> ONLINE
+"
+            "🔥 Sistem siap mengirim alert saham."
         )
+        ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, test_message)
         if ok:
             st.success("Pesan test berhasil dikirim.")
         else:
@@ -1280,18 +1045,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Search Emiten Mandiri")
-
-    single_symbol = st.text_input(
-        "Masukkan emiten",
-        placeholder="Contoh: BBCA atau GOTO"
-    )
-
-    add_mode = st.radio(
-        "Mode pencarian",
-        ["Tambahkan ke watchlist", "Analisa emiten ini saja"],
-        index=0
-    )
-
+    single_symbol = st.text_input("Masukkan emiten", placeholder="Contoh: BBCA atau GOTO")
+    add_mode = st.radio("Mode pencarian", ["Tambahkan ke watchlist", "Analisa emiten ini saja"], index=0)
     run_btn = st.button("Jalankan Screener", use_container_width=True)
 
     st.markdown("---")
@@ -1303,7 +1058,6 @@ with st.sidebar:
 # =========================================================
 watchlist_symbols = [normalize_jk_symbol(x) for x in custom_symbols.split(",") if x.strip()]
 watchlist_symbols = [x for x in watchlist_symbols if x]
-
 manual_symbol = normalize_jk_symbol(single_symbol) if single_symbol else ""
 
 if add_mode == "Tambahkan ke watchlist":
@@ -1314,7 +1068,6 @@ else:
     symbols = [manual_symbol] if manual_symbol else []
 
 symbols = list(dict.fromkeys(symbols))
-
 if not symbols:
     st.warning("Masukkan minimal 1 kode saham atau cari 1 emiten.")
     st.stop()
@@ -1324,12 +1077,7 @@ if not symbols:
 # =========================================================
 if run_btn or "screener_df" not in st.session_state:
     with st.spinner("Mengambil data dan menyusun screener..."):
-        st.session_state["screener_df"] = run_screener(
-            symbols,
-            period,
-            interval,
-            max_price=MAX_PRICE
-        )
+        st.session_state["screener_df"] = run_screener(symbols, period, interval, max_price=MAX_PRICE)
         st.session_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 screener_df = st.session_state.get("screener_df", pd.DataFrame())
@@ -1337,42 +1085,24 @@ if screener_df.empty:
     st.error(f"Tidak ada data yang lolos filter. Pastikan kode emiten benar atau harga saham ≤ {MAX_PRICE}.")
     st.stop()
 
-display_df = screener_df.sort_values(
-    by=["score_accum", "score_total", "rvol", "gain"],
-    ascending=[False, False, False, False]
-).head(TOP_N).reset_index(drop=True)
-
+display_df = screener_df.sort_values(by=["score_accum", "score_total", "rvol", "gain"], ascending=[False, False, False, False]).head(TOP_N).reset_index(drop=True)
 alert_df = build_telegram_alerts(display_df)
 
+# =========================================================
 # AUTO TELEGRAM NOTIF (ANTI SPAM)
-if (
-    telegram_enabled
-    and auto_refresh
-    and telegram_bot_token
-    and telegram_chat_id
-    and not alert_df.empty
-):
-    current_alert_key = "|".join(
-        [
-            f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}"
-            for _, row in alert_df.head(10).iterrows()
-        ]
-    )
-
+# =========================================================
+if telegram_enabled and auto_refresh and telegram_bot_token and telegram_chat_id and not display_df.empty:
+    source_df = alert_df.head(5) if send_only_alerts else display_df.head(5)
+    current_alert_key = "|".join([f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}" for _, row in source_df.iterrows()])
     last_alert_key = st.session_state.get("last_alert_key", "")
 
     if current_alert_key != last_alert_key:
-        message = build_telegram_watchlist_message(
-            alert_df,
-            top_n=min(int(telegram_top_n), len(alert_df))
-        )
+        if send_only_alerts:
+            message = build_telegram_strong_alert_message(source_df, top_n=5)
+        else:
+            message = build_telegram_watchlist_message(source_df, top_n=5)
 
-        ok, msg = send_telegram_message(
-            telegram_bot_token,
-            telegram_chat_id,
-            message
-        )
-
+        ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
         if ok:
             st.session_state["last_alert_key"] = current_alert_key
             st.success("Auto notif Telegram terkirim")
@@ -1401,13 +1131,20 @@ with cbtn1:
 with cbtn2:
     st.metric("Jumlah Alert Kuat", len(alert_df))
 
+# =========================================================
+# KIRIM MANUAL
+# =========================================================
 if telegram_enabled and send_now_btn:
-    target_df = alert_df if send_only_alerts else display_df.head(int(telegram_top_n))
-    message = build_telegram_watchlist_message(target_df, top_n=int(telegram_top_n))
-    ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
+    if send_only_alerts:
+        target_df = alert_df.head(5)
+        message = build_telegram_strong_alert_message(target_df, top_n=5)
+    else:
+        target_df = display_df.head(5)
+        message = build_telegram_watchlist_message(target_df, top_n=5)
 
+    ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
     if ok:
-        st.success("Notifikasi Telegram berhasil dikirim.")
+        st.success("5 emiten terbaik berhasil dikirim ke Telegram.")
     else:
         st.error(f"Gagal kirim Telegram: {msg}")
 
@@ -1415,13 +1152,8 @@ if telegram_enabled and send_now_btn:
 # MAIN TABLE
 # =========================================================
 st.subheader("Top 30 Saham Akumulasi")
-
 components.html(
-    make_html_table(
-        display_df,
-        "HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI",
-        "Ranking berdasarkan Akum Score + Total Score + RVOL + Gain"
-    ),
+    make_html_table(display_df, "HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI", "Ranking berdasarkan Akum Score + Total Score + RVOL + Gain"),
     height=560,
     scrolling=True
 )
@@ -1430,16 +1162,11 @@ components.html(
 # ALERT TABLE
 # =========================================================
 st.subheader("🚨 Alert Kuat (Siap Kirim Telegram)")
-
 if alert_df.empty:
     st.info("Belum ada saham dengan kriteria akumulasi kuat.")
 else:
     st.dataframe(
-        alert_df[[
-            "symbol", "now", "gain", "rvol", "rsi",
-            "fase", "trend", "sinyal",
-            "score_accum", "score_total"
-        ]],
+        alert_df[["symbol", "now", "gain", "rvol", "rsi", "fase", "trend", "sinyal", "score_accum", "score_total"]],
         use_container_width=True,
         height=260
     )
@@ -1448,24 +1175,14 @@ else:
 # RANKING TABLE
 # =========================================================
 st.subheader("Ranking 30 Data Terbaik")
-
-rank_df = display_df[[
-    "symbol", "now", "gain", "rvol", "rsi", "rsi_5m", "val", "fase", "trend",
-    "score_accum", "score_scalping", "score_bsjp", "score_swing", "score_bandar", "score_total"
-]].copy()
-
-rank_df.columns = [
-    "EMITEN", "PRICE", "GAIN", "RVOL", "RSI", "RSI 5M", "VALUE", "FASE", "TREND",
-    "AKUM SCORE", "SCALPING", "BSJP", "SWING", "BANDAR", "TOTAL"
-]
-
+rank_df = display_df[["symbol", "now", "gain", "rvol", "rsi", "rsi_5m", "val", "fase", "trend", "score_accum", "score_scalping", "score_bsjp", "score_swing", "score_bandar", "score_total"]].copy()
+rank_df.columns = ["EMITEN", "PRICE", "GAIN", "RVOL", "RSI", "RSI 5M", "VALUE", "FASE", "TREND", "AKUM SCORE", "SCALPING", "BSJP", "SWING", "BANDAR", "TOTAL"]
 rank_df["PRICE"] = rank_df["PRICE"].apply(fmt_price)
 rank_df["GAIN"] = rank_df["GAIN"].apply(fmt_pct)
 rank_df["RVOL"] = rank_df["RVOL"].apply(fmt_pct)
 rank_df["RSI"] = rank_df["RSI"].apply(rsi_cell_text)
 rank_df["RSI 5M"] = rank_df["RSI 5M"].apply(rsi_cell_text)
 rank_df["VALUE"] = rank_df["VALUE"].apply(human_value)
-
 st.dataframe(rank_df, use_container_width=True, height=520)
 
 # =========================================================
@@ -1486,7 +1203,6 @@ d6.metric("RSI 5M", rsi_cell_text(selected_row["rsi_5m"]))
 show_detail_chart(selected_df, selected_row["symbol"])
 
 st.subheader("Analisa Strategi")
-
 t1, t2, t3, t4 = st.tabs(["1. Scalping", "2. BSJP", "3. Swing", "4. Bandarmologi"])
 
 with t1:
