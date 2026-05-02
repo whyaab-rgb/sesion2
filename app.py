@@ -880,71 +880,70 @@ def bg_risk(v):
 
 
 def make_html_table(df: pd.DataFrame, title: str, sub: str):
-    html = textwrap.dedent(f"""
+    html = f"""
     <html>
     <head>
     <style>
-    body {
+    body {{
         margin: 0;
         background: #07111b;
         color: white;
         font-family: Arial, Helvetica, sans-serif;
-    }
-    .screen-box {
+    }}
+    .screen-box {{
         border: 1px solid #17324d;
         border-radius: 10px;
         padding: 8px;
         background: #07111b;
         box-sizing: border-box;
         width: 100%;
-    }
-    .screener-title {
+    }}
+    .screener-title {{
         text-align: center;
-        font-weight: 900;
-        font-size: 15px;
+        font-weight: 800;
+        font-size: 13px;
         color: #eaf2ff;
         margin-bottom: 4px;
-        letter-spacing: 0.3px;
-    }
-    .screener-sub {
+    }}
+    .screener-sub {{
         text-align: center;
         color: #9fb5d1;
-        font-size: 11px;
-        margin-bottom: 8px;
-    }
-    .table-wrap {
+        font-size: 10px;
+        margin-bottom: 6px;
+    }}
+    .table-wrap {{
         width: 100%;
         overflow-x: auto;
-    }
-    .custom-table {
+    }}
+    .custom-table {{
         width: 100%;
         border-collapse: collapse;
         font-size: 11px;
-        min-width: 1700px;
-    }
-    .custom-table th {
+        min-width: 1500px;
+    }}
+    .custom-table th {{
         background: #184574;
         color: #ffffff;
         border: 1px solid #2a527b;
-        padding: 6px 4px;
-        text-align: center;
-        white-space: nowrap;
-        font-weight: 900;
-    }
-    .custom-table td {
-        border: 1px solid #20364e;
-        padding: 5px 4px;
+        padding: 5px 3px;
         text-align: center;
         white-space: nowrap;
         font-weight: 800;
-    }
-    .footer-line {
+    }}
+    .custom-table td {{
+        border: 1px solid #20364e;
+        padding: 4px 3px;
+        text-align: center;
+        white-space: nowrap;
+        font-weight: 700;
+    }}
+    .footer-line {{
         margin-top: 6px;
         text-align: center;
         color: #ffd451;
         font-size: 10px;
         font-weight: 700;
-    }
+    }}
     </style>
     </head>
     <body>
@@ -957,50 +956,54 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
           <tr>
             <th>RANK</th>
             <th>EMITEN</th>
-            <th>SIGNAL</th>
-            <th>AI SCORE</th>
+            <th>AKUM SCORE</th>
             <th>TOTAL</th>
             <th>GAIN</th>
+            <th>WICK</th>
+            <th>AKSI</th>
+            <th>SINYAL</th>
             <th>RVOL</th>
-            <th>NOW</th>
             <th>ENTRY</th>
+            <th>NOW</th>
             <th>TP</th>
             <th>SL</th>
+            <th>PROFIT</th>
+            <th>%TO TP</th>
+            <th>RSI SIG</th>
             <th>RSI</th>
             <th>RSI 5M</th>
-            <th>VALUE</th>
+            <th>VAL</th>
             <th>FASE</th>
             <th>TREND</th>
-            <th>RISK</th>
-            <th>AKSI</th>
-            <th>DETAIL</th>
           </tr>
         </thead>
         <tbody>
-    """)
+    """
 
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         html += f"""
         <tr>
             <td style="background:#0f172a;color:#fff;">{i}</td>
             <td style="background:#1d4ed8;color:#fff;">{row['symbol']}</td>
-            <td style="background:{bg_signal(row['sinyal'])};color:#fff;">{row['emoji_signal']}</td>
-            <td style="background:{bg_score(row['score_accum'])};color:#fff;">{int(row['score_accum'])}</td>
+            <td style="background:{bg_accum_score(row['score_accum'])};color:#fff;">{int(row['score_accum'])}</td>
             <td style="background:#0b3b66;color:#fff;">{int(row['score_total'])}</td>
             <td style="background:{bg_gain(row['gain'])};color:#fff;">{fmt_pct(row['gain'])}</td>
+            <td style="background:{bg_wick(row['wick'])};color:#fff;">{fmt_pct(row['wick'])}</td>
+            <td style="background:{bg_aksi(row['aksi'])};color:#fff;">{row['aksi']}</td>
+            <td style="background:{bg_sinyal(row['sinyal'])};color:#fff;">{row['sinyal']}</td>
             <td style="background:{bg_rvol(row['rvol'])};color:#fff;">{fmt_pct(row['rvol'])}</td>
-            <td style="background:#2563eb;color:#fff;">{fmt_price(row['now'])}</td>
-            <td style="background:#1d4ed8;color:#fff;">{fmt_price(row['entry'])}</td>
-            <td style="background:#16a34a;color:#fff;">{fmt_price(row['tp'])}</td>
-            <td style="background:#b91c1c;color:#fff;">{fmt_price(row['sl'])}</td>
-            <td style="background:#374151;color:#fff;">{rsi_cell_text(row['rsi'])}</td>
-            <td style="background:#374151;color:#fff;">{rsi_cell_text(row['rsi_5m'])}</td>
+            <td style="background:{bg_price('entry')};color:#fff;">{fmt_price(row['entry'])}</td>
+            <td style="background:{bg_price('now')};color:#fff;">{fmt_price(row['now'])}</td>
+            <td style="background:{bg_price('tp')};color:#fff;">{fmt_price(row['tp'])}</td>
+            <td style="background:{bg_price('sl')};color:#fff;">{fmt_price(row['sl'])}</td>
+            <td style="background:{bg_profit(row['profit'])};color:#fff;">{fmt_pct(row['profit'])}</td>
+            <td style="background:{bg_to_tp(row['to_tp'])};color:#fff;">{fmt_pct(row['to_tp'])}</td>
+            <td style="background:{bg_rsi_sig(row['rsi_sig'])};color:#fff;">{row['rsi_sig']}</td>
+            <td style="background:{bg_rsi(row['rsi'])};color:#fff;">{rsi_cell_text(row['rsi'])}</td>
+            <td style="background:{bg_rsi(row['rsi_5m'])};color:#fff;">{rsi_cell_text(row['rsi_5m'])}</td>
             <td style="background:#183b69;color:#fff;">{human_value(row['val'])}</td>
-            <td style="background:{bg_phase(row['fase'])};color:#fff;">{row['fase']}</td>
+            <td style="background:{bg_fase(row['fase'])};color:#fff;">{row['fase']}</td>
             <td style="background:{bg_trend(row['trend'])};color:#fff;">{row['trend']}</td>
-            <td style="background:{bg_risk(row['risk'])};color:#fff;">{row['risk']}</td>
-            <td style="background:#334155;color:#fff;">{row['aksi']}</td>
-            <td style="background:{bg_signal(row['sinyal'])};color:#fff;">{row['sinyal']}</td>
         </tr>
         """
 
@@ -1008,7 +1011,9 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         </tbody>
       </table>
       </div>
-      <div class="footer-line">Final fixed watchlist | filter aktif | Telegram per saham | anti message-too-long | anti-spam refresh</div>
+      <div class="footer-line">
+        Top ranking | AI Score + RVOL + Gain | SL≈1xATR | TP≈2xATR
+      </div>
     </div>
     </body>
     </html>
