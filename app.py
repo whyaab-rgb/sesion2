@@ -28,7 +28,7 @@ SYMBOLS = [
 ]
 
 MAX_PRICE = 1000
-TOP_N = 30
+TOP_N = 50
 WATCHLISTS = {
     "IDX Top 100": SYMBOLS[:100],
     "IDX Top 800": SYMBOLS[:800],
