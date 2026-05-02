@@ -878,6 +878,133 @@ def bg_phase(v):
 def bg_risk(v):
     return {"LOW": "#16a34a", "MEDIUM": "#d97706", "HIGH": "#b91c1c"}.get(str(v), "#334155")
 
+def bg_accum_score(v):
+    if v >= 70:
+        return "#9333ea"
+    elif v >= 55:
+        return "#16a34a"
+    elif v >= 40:
+        return "#2563eb"
+    return "#374151"
+
+
+def bg_gain(v):
+    if v > 3:
+        return "#10b981"
+    elif v > 0:
+        return "#15803d"
+    elif v > -2:
+        return "#dc2626"
+    return "#991b1b"
+
+
+def bg_wick(v):
+    if v < 15:
+        return "#0f766e"
+    elif v < 25:
+        return "#2563eb"
+    elif v < 35:
+        return "#d97706"
+    return "#dc2626"
+
+
+def bg_aksi(v):
+    return {
+        "AT ENTRY": "#1d4ed8",
+        "WATCH": "#b45309",
+        "WAIT GC": "#374151",
+        "HOLD": "#2563eb",
+        "SIAP BELI": "#7c3aed",
+        "WASPADA OB": "#d97706"
+    }.get(v, "#334155")
+
+
+def bg_sinyal(v):
+    return {
+        "ON TRACK": "#16a34a",
+        "REBOUND": "#d97706",
+        "AKUM": "#15803d",
+        "DIST": "#b91c1c",
+        "SUPER": "#7e22ce",
+        "HAKA": "#14b8a6",
+        "GC NOW": "#9333ea",
+        "WASPADA OB": "#ea580c",
+        "WAIT": "#111827"
+    }.get(v, "#334155")
+
+
+def bg_rvol(v):
+    if v >= 250:
+        return "#9333ea"
+    elif v >= 150:
+        return "#f97316"
+    elif v >= 100:
+        return "#2563eb"
+    return "#374151"
+
+
+def bg_price(kind):
+    return {
+        "entry": "#1d4ed8",
+        "now": "#2563eb",
+        "tp": "#16a34a",
+        "sl": "#b91c1c"
+    }.get(kind, "#243244")
+
+
+def bg_profit(v):
+    if v > 2:
+        return "#16a34a"
+    elif v > 0:
+        return "#0f766e"
+    elif v > -2:
+        return "#92400e"
+    return "#b91c1c"
+
+
+def bg_to_tp(v):
+    if v <= 1:
+        return "#f97316"
+    elif v <= 3:
+        return "#16a34a"
+    return "#0f766e"
+
+
+def bg_rsi_sig(v):
+    return {
+        "UP": "#16a34a",
+        "DEAD": "#dc2626",
+        "GOLDEN": "#7c3aed",
+        "WAIT": "#111827"
+    }.get(v, "#334155")
+
+
+def bg_rsi(v):
+    if v >= 70:
+        return "#f59e0b"
+    elif v >= 55:
+        return "#16a34a"
+    elif v >= 45:
+        return "#2563eb"
+    return "#7c3aed"
+
+
+def bg_fase(v):
+    return {
+        "BIG AKUM": "#9333ea",
+        "AKUM": "#16a34a",
+        "NEUTRAL": "#374151",
+        "DIST": "#dc2626",
+        "BIG DIST": "#991b1b"
+    }.get(v, "#334155")
+
+
+def bg_trend(v):
+    return {
+        "BULL": "#16a34a",
+        "BEAR": "#dc2626",
+        "NEUTRAL": "#6b7280"
+    }.get(v, "#334155")
 
 def make_html_table(df: pd.DataFrame, title: str, sub: str):
     html = f"""
