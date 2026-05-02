@@ -259,16 +259,16 @@ def build_box_telegram_message(row):
     value = human_value(row["val"])
     rsi = rsi_cell_text(row["rsi"])
 
-    trend = row["trend"]
-    fase = row["fase"]
-    sinyal = row["sinyal"]
-
-    entry = fmt_price(row["entry"])
-    sl = fmt_price(row["sl"])
-    tp = fmt_price(row["tp"])
+    trend = str(row["trend"])
+    fase = str(row["fase"])
+    sinyal = str(row["sinyal"])
 
     support = fmt_price(row["support"])
     resistance = fmt_price(row["resistance"])
+    entry_zone = str(row.get("entry_zone", fmt_price(row["entry"])))
+    entry_status = str(row.get("entry_status", "-"))
+    sl = fmt_price(row["sl"])
+    tp_zone = str(row.get("tp_zone", fmt_price(row["tp"])))
 
     arah = "▼" if row["gain"] < 0 else "▲"
     risk = risk_level(row["score_accum"], row["rsi"], row["sinyal"])
@@ -280,8 +280,8 @@ def build_box_telegram_message(row):
 │ Harga : {now:<7} {arah} {gain:<9}            │
 │ RVOL  : {rvol:<7} | Value : {value:<10}      │
 ├──────────────────────────────────────────────┤
-│ Trend      : {str(trend)[:28]:<28}│
-│ Fase       : {str(fase)[:28]:<28}│
+│ Trend      : {trend[:28]:<28}│
+│ Fase       : {fase[:28]:<28}│
 │ Support    : {support:<28}│
 │ Resistance : {resistance:<28}│
 │ RSI        : {rsi:<28}│
@@ -292,10 +292,11 @@ def build_box_telegram_message(row):
 │ Risiko     : {risk:<28}│
 ├──────────────────────────────────────────────┤
 │ Sinyal     : {sig[:28]:<28}│
-│ Detail     : {str(sinyal)[:28]:<28}│
-│ Entry      : {entry:<28}│
+│ Detail     : {sinyal[:28]:<28}│
+│ Entry Zone : {entry_zone:<28}│
+│ Status     : {entry_status:<28}│
 │ Stop Loss  : {sl:<28}│
-│ Take Profit: {tp:<28}│
+│ TP1/2/3    : {tp_zone:<28}│
 └──────────────────────────────────────────────┘
 </pre>"""
     return message
@@ -637,6 +638,61 @@ def compute_accum_score(close_, ma20, ma50, rsi, rvol, val, phase, signal, gain)
     return max(score, 0)
 
 
+
+# =========================================================
+# ENTRY ZONE ENGINE
+# =========================================================
+def build_entry_zone(close_, support, ma20, atr, resistance):
+    """Membuat zona entry otomatis berbasis support, MA20, dan ATR."""
+    if pd.isna(close_):
+        return {
+            "entry_low": np.nan,
+            "entry_high": np.nan,
+            "entry_zone": "-",
+            "entry_status": "WAIT DATA",
+        }
+
+    if pd.isna(atr) or atr <= 0:
+        atr = close_ * 0.03
+
+    if not pd.isna(support) and not pd.isna(ma20):
+        base = (support + ma20) / 2
+    elif not pd.isna(support):
+        base = support
+    elif not pd.isna(ma20):
+        base = ma20
+    else:
+        base = close_
+
+    entry_low = round(base - (atr * 0.30))
+    entry_high = round(base + (atr * 0.30))
+
+    if close_ < entry_low:
+        entry_status = "BELOW ZONE"
+    elif entry_low <= close_ <= entry_high:
+        entry_status = "IN ZONE"
+    elif not pd.isna(resistance) and close_ >= resistance * 0.985:
+        entry_status = "BREAKOUT ZONE"
+    else:
+        entry_status = "ABOVE ZONE"
+
+    return {
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "entry_zone": f"{fmt_price(entry_low)} - {fmt_price(entry_high)}",
+        "entry_status": entry_status,
+    }
+
+
+def bg_entry_status(v):
+    return {
+        "IN ZONE": "#16a34a",
+        "BREAKOUT ZONE": "#9333ea",
+        "ABOVE ZONE": "#d97706",
+        "BELOW ZONE": "#2563eb",
+        "WAIT DATA": "#374151",
+    }.get(str(v), "#374151")
+
 # =========================================================
 # ROW BUILDER
 # =========================================================
@@ -664,11 +720,32 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
 
     rvol = (vol / vol_ma20 * 100) if not pd.isna(vol_ma20) and vol_ma20 > 0 else np.nan
 
-    entry = round((support + ma20) / 2) if not pd.isna(support) and not pd.isna(ma20) else round(close_)
-    tp = round(close_ + (atr * 2)) if not pd.isna(atr) else round(close_ * 1.04)
-    sl = round(close_ - atr) if not pd.isna(atr) else round(close_ * 0.97)
-    profit = ((close_ - entry) / entry * 100) if entry else 0.0
-    to_tp = ((tp - close_) / close_ * 100) if close_ else 0.0
+    zone = build_entry_zone(
+        close_=close_,
+        support=support,
+        ma20=ma20,
+        atr=atr,
+        resistance=resistance,
+    )
+
+    entry_low = zone["entry_low"]
+    entry_high = zone["entry_high"]
+    entry_zone = zone["entry_zone"]
+    entry_status = zone["entry_status"]
+    entry = entry_low
+
+    if pd.isna(atr) or atr <= 0:
+        atr = close_ * 0.03 if not pd.isna(close_) else 0
+
+    tp1 = round(close_ + (atr * 1.0)) if not pd.isna(close_) else np.nan
+    tp2 = round(close_ + (atr * 2.0)) if not pd.isna(close_) else np.nan
+    tp3 = round(close_ + (atr * 3.0)) if not pd.isna(close_) else np.nan
+    tp = tp2
+    tp_zone = f"{fmt_price(tp1)} / {fmt_price(tp2)} / {fmt_price(tp3)}"
+
+    sl = round(entry_low - (atr * 0.70)) if not pd.isna(entry_low) else np.nan
+    profit = ((close_ - entry) / entry * 100) if entry and not pd.isna(entry) else 0.0
+    to_tp = ((tp - close_) / close_ * 100) if close_ and not pd.isna(tp) else 0.0
 
     intraday_rsi = np.nan
     if not intraday_5m.empty and "Close" in intraday_5m.columns:
@@ -696,8 +773,16 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
         "emoji_signal": signal_emoji(sinyal, trend, gain),
         "rvol": rvol,
         "entry": entry,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "entry_zone": entry_zone,
+        "entry_status": entry_status,
         "now": close_,
         "tp": tp,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "tp_zone": tp_zone,
         "sl": sl,
         "support": support,
         "resistance": resistance,
@@ -716,7 +801,7 @@ def build_row(symbol: str, daily_df: pd.DataFrame, intraday_5m: pd.DataFrame):
         "score_bandar": scores["bandar"],
         "score_total": total,
         "score_accum": accum_score,
-        "daily_df": df
+        "daily_df": df,
     }
 
 
@@ -878,203 +963,79 @@ def bg_phase(v):
 def bg_risk(v):
     return {"LOW": "#16a34a", "MEDIUM": "#d97706", "HIGH": "#b91c1c"}.get(str(v), "#334155")
 
-def bg_accum_score(v):
-    if v >= 70:
-        return "#9333ea"
-    elif v >= 55:
-        return "#16a34a"
-    elif v >= 40:
-        return "#2563eb"
-    return "#374151"
-
-
-def bg_gain(v):
-    if v > 3:
-        return "#10b981"
-    elif v > 0:
-        return "#15803d"
-    elif v > -2:
-        return "#dc2626"
-    return "#991b1b"
-
-
-def bg_wick(v):
-    if v < 15:
-        return "#0f766e"
-    elif v < 25:
-        return "#2563eb"
-    elif v < 35:
-        return "#d97706"
-    return "#dc2626"
-
-
-def bg_aksi(v):
-    return {
-        "AT ENTRY": "#1d4ed8",
-        "WATCH": "#b45309",
-        "WAIT GC": "#374151",
-        "HOLD": "#2563eb",
-        "SIAP BELI": "#7c3aed",
-        "WASPADA OB": "#d97706"
-    }.get(v, "#334155")
-
-
-def bg_sinyal(v):
-    return {
-        "ON TRACK": "#16a34a",
-        "REBOUND": "#d97706",
-        "AKUM": "#15803d",
-        "DIST": "#b91c1c",
-        "SUPER": "#7e22ce",
-        "HAKA": "#14b8a6",
-        "GC NOW": "#9333ea",
-        "WASPADA OB": "#ea580c",
-        "WAIT": "#111827"
-    }.get(v, "#334155")
-
-
-def bg_rvol(v):
-    if v >= 250:
-        return "#9333ea"
-    elif v >= 150:
-        return "#f97316"
-    elif v >= 100:
-        return "#2563eb"
-    return "#374151"
-
-
-def bg_price(kind):
-    return {
-        "entry": "#1d4ed8",
-        "now": "#2563eb",
-        "tp": "#16a34a",
-        "sl": "#b91c1c"
-    }.get(kind, "#243244")
-
-
-def bg_profit(v):
-    if v > 2:
-        return "#16a34a"
-    elif v > 0:
-        return "#0f766e"
-    elif v > -2:
-        return "#92400e"
-    return "#b91c1c"
-
-
-def bg_to_tp(v):
-    if v <= 1:
-        return "#f97316"
-    elif v <= 3:
-        return "#16a34a"
-    return "#0f766e"
-
-
-def bg_rsi_sig(v):
-    return {
-        "UP": "#16a34a",
-        "DEAD": "#dc2626",
-        "GOLDEN": "#7c3aed",
-        "WAIT": "#111827"
-    }.get(v, "#334155")
-
-
-def bg_rsi(v):
-    if v >= 70:
-        return "#f59e0b"
-    elif v >= 55:
-        return "#16a34a"
-    elif v >= 45:
-        return "#2563eb"
-    return "#7c3aed"
-
-
-def bg_fase(v):
-    return {
-        "BIG AKUM": "#9333ea",
-        "AKUM": "#16a34a",
-        "NEUTRAL": "#374151",
-        "DIST": "#dc2626",
-        "BIG DIST": "#991b1b"
-    }.get(v, "#334155")
-
-
-def bg_trend(v):
-    return {
-        "BULL": "#16a34a",
-        "BEAR": "#dc2626",
-        "NEUTRAL": "#6b7280"
-    }.get(v, "#334155")
 
 def make_html_table(df: pd.DataFrame, title: str, sub: str):
-    html = f"""
+    html = """
     <html>
     <head>
     <style>
-    body {{
+    body {
         margin: 0;
         background: #07111b;
         color: white;
         font-family: Arial, Helvetica, sans-serif;
-    }}
-    .screen-box {{
+    }
+    .screen-box {
         border: 1px solid #17324d;
         border-radius: 10px;
         padding: 8px;
         background: #07111b;
         box-sizing: border-box;
         width: 100%;
-    }}
-    .screener-title {{
+    }
+    .screener-title {
         text-align: center;
-        font-weight: 800;
-        font-size: 13px;
+        font-weight: 900;
+        font-size: 15px;
         color: #eaf2ff;
         margin-bottom: 4px;
-    }}
-    .screener-sub {{
+        letter-spacing: 0.3px;
+    }
+    .screener-sub {
         text-align: center;
         color: #9fb5d1;
-        font-size: 10px;
-        margin-bottom: 6px;
-    }}
-    .table-wrap {{
+        font-size: 11px;
+        margin-bottom: 8px;
+    }
+    .table-wrap {
         width: 100%;
         overflow-x: auto;
-    }}
-    .custom-table {{
+    }
+    .custom-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 11px;
-        min-width: 1500px;
-    }}
-    .custom-table th {{
+        min-width: 1850px;
+    }
+    .custom-table th {
         background: #184574;
         color: #ffffff;
         border: 1px solid #2a527b;
-        padding: 5px 3px;
+        padding: 6px 4px;
+        text-align: center;
+        white-space: nowrap;
+        font-weight: 900;
+    }
+    .custom-table td {
+        border: 1px solid #20364e;
+        padding: 5px 4px;
         text-align: center;
         white-space: nowrap;
         font-weight: 800;
-    }}
-    .custom-table td {{
-        border: 1px solid #20364e;
-        padding: 4px 3px;
-        text-align: center;
-        white-space: nowrap;
-        font-weight: 700;
-    }}
-    .footer-line {{
+    }
+    .footer-line {
         margin-top: 6px;
         text-align: center;
         color: #ffd451;
         font-size: 10px;
         font-weight: 700;
-    }}
+    }
     </style>
     </head>
     <body>
     <div class="screen-box">
+    """
+    html += f"""
       <div class="screener-title">{title}</div>
       <div class="screener-sub">{sub}</div>
       <div class="table-wrap">
@@ -1083,25 +1044,24 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
           <tr>
             <th>RANK</th>
             <th>EMITEN</th>
-            <th>AKUM SCORE</th>
+            <th>SIGNAL</th>
+            <th>AI SCORE</th>
             <th>TOTAL</th>
             <th>GAIN</th>
-            <th>WICK</th>
-            <th>AKSI</th>
-            <th>SINYAL</th>
             <th>RVOL</th>
-            <th>ENTRY</th>
             <th>NOW</th>
-            <th>TP</th>
+            <th>ENTRY ZONE</th>
+            <th>ENTRY STATUS</th>
+            <th>TP1/TP2/TP3</th>
             <th>SL</th>
-            <th>PROFIT</th>
-            <th>%TO TP</th>
-            <th>RSI SIG</th>
             <th>RSI</th>
             <th>RSI 5M</th>
-            <th>VAL</th>
+            <th>VALUE</th>
             <th>FASE</th>
             <th>TREND</th>
+            <th>RISK</th>
+            <th>AKSI</th>
+            <th>DETAIL</th>
           </tr>
         </thead>
         <tbody>
@@ -1112,25 +1072,24 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         <tr>
             <td style="background:#0f172a;color:#fff;">{i}</td>
             <td style="background:#1d4ed8;color:#fff;">{row['symbol']}</td>
-            <td style="background:{bg_accum_score(row['score_accum'])};color:#fff;">{int(row['score_accum'])}</td>
+            <td style="background:{bg_signal(row['sinyal'])};color:#fff;">{row['emoji_signal']}</td>
+            <td style="background:{bg_score(row['score_accum'])};color:#fff;">{int(row['score_accum'])}</td>
             <td style="background:#0b3b66;color:#fff;">{int(row['score_total'])}</td>
             <td style="background:{bg_gain(row['gain'])};color:#fff;">{fmt_pct(row['gain'])}</td>
-            <td style="background:{bg_wick(row['wick'])};color:#fff;">{fmt_pct(row['wick'])}</td>
-            <td style="background:{bg_aksi(row['aksi'])};color:#fff;">{row['aksi']}</td>
-            <td style="background:{bg_sinyal(row['sinyal'])};color:#fff;">{row['sinyal']}</td>
             <td style="background:{bg_rvol(row['rvol'])};color:#fff;">{fmt_pct(row['rvol'])}</td>
-            <td style="background:{bg_price('entry')};color:#fff;">{fmt_price(row['entry'])}</td>
-            <td style="background:{bg_price('now')};color:#fff;">{fmt_price(row['now'])}</td>
-            <td style="background:{bg_price('tp')};color:#fff;">{fmt_price(row['tp'])}</td>
-            <td style="background:{bg_price('sl')};color:#fff;">{fmt_price(row['sl'])}</td>
-            <td style="background:{bg_profit(row['profit'])};color:#fff;">{fmt_pct(row['profit'])}</td>
-            <td style="background:{bg_to_tp(row['to_tp'])};color:#fff;">{fmt_pct(row['to_tp'])}</td>
-            <td style="background:{bg_rsi_sig(row['rsi_sig'])};color:#fff;">{row['rsi_sig']}</td>
-            <td style="background:{bg_rsi(row['rsi'])};color:#fff;">{rsi_cell_text(row['rsi'])}</td>
-            <td style="background:{bg_rsi(row['rsi_5m'])};color:#fff;">{rsi_cell_text(row['rsi_5m'])}</td>
+            <td style="background:#2563eb;color:#fff;">{fmt_price(row['now'])}</td>
+            <td style="background:#1d4ed8;color:#fff;">{row.get('entry_zone', fmt_price(row['entry']))}</td>
+            <td style="background:{bg_entry_status(row.get('entry_status', '-'))};color:#fff;">{row.get('entry_status', '-')}</td>
+            <td style="background:#16a34a;color:#fff;">{row.get('tp_zone', fmt_price(row['tp']))}</td>
+            <td style="background:#b91c1c;color:#fff;">{fmt_price(row['sl'])}</td>
+            <td style="background:#374151;color:#fff;">{rsi_cell_text(row['rsi'])}</td>
+            <td style="background:#374151;color:#fff;">{rsi_cell_text(row['rsi_5m'])}</td>
             <td style="background:#183b69;color:#fff;">{human_value(row['val'])}</td>
-            <td style="background:{bg_fase(row['fase'])};color:#fff;">{row['fase']}</td>
+            <td style="background:{bg_phase(row['fase'])};color:#fff;">{row['fase']}</td>
             <td style="background:{bg_trend(row['trend'])};color:#fff;">{row['trend']}</td>
+            <td style="background:{bg_risk(row['risk'])};color:#fff;">{row['risk']}</td>
+            <td style="background:#334155;color:#fff;">{row['aksi']}</td>
+            <td style="background:{bg_signal(row['sinyal'])};color:#fff;">{row['sinyal']}</td>
         </tr>
         """
 
@@ -1138,14 +1097,13 @@ def make_html_table(df: pd.DataFrame, title: str, sub: str):
         </tbody>
       </table>
       </div>
-      <div class="footer-line">
-        Top ranking | AI Score + RVOL + Gain | SL≈1xATR | TP≈2xATR
-      </div>
+      <div class="footer-line">Final fixed watchlist + entry zone | filter aktif | Telegram per saham | anti message-too-long | anti-spam refresh</div>
     </div>
     </body>
     </html>
     """
     return html
+
 
 
 # =========================================================
@@ -1424,18 +1382,19 @@ else:
 
     st.subheader("Ranking Data")
     rank_df = display_df[[
-        "symbol", "emoji_signal", "now", "gain", "rvol", "rsi", "rsi_5m", "val",
-        "fase", "trend", "risk", "sinyal", "score_accum", "score_scalping",
-        "score_bsjp", "score_swing", "score_bandar", "score_total"
+        "symbol", "emoji_signal", "now", "entry_zone", "entry_status", "tp_zone", "sl",
+        "gain", "rvol", "rsi", "rsi_5m", "val", "fase", "trend", "risk", "sinyal",
+        "score_accum", "score_scalping", "score_bsjp", "score_swing", "score_bandar", "score_total"
     ]].copy()
 
     rank_df.columns = [
-        "EMITEN", "SIGNAL", "PRICE", "GAIN", "RVOL", "RSI", "RSI 5M", "VALUE",
-        "FASE", "TREND", "RISK", "DETAIL", "AI SCORE", "SCALPING",
-        "BSJP", "SWING", "BANDAR", "TOTAL"
+        "EMITEN", "SIGNAL", "PRICE", "ENTRY ZONE", "ENTRY STATUS", "TP1/TP2/TP3", "SL",
+        "GAIN", "RVOL", "RSI", "RSI 5M", "VALUE", "FASE", "TREND", "RISK", "DETAIL",
+        "AI SCORE", "SCALPING", "BSJP", "SWING", "BANDAR", "TOTAL"
     ]
 
     rank_df["PRICE"] = rank_df["PRICE"].apply(fmt_price)
+    rank_df["SL"] = rank_df["SL"].apply(fmt_price)
     rank_df["GAIN"] = rank_df["GAIN"].apply(fmt_pct)
     rank_df["RVOL"] = rank_df["RVOL"].apply(fmt_pct)
     rank_df["RSI"] = rank_df["RSI"].apply(rsi_cell_text)
@@ -1462,8 +1421,9 @@ if not display_df.empty:
     d6.metric("SIGNAL", selected_row["emoji_signal"])
 
     st.info(
-        f"Entry: {fmt_price(selected_row['entry'])} | "
-        f"TP: {fmt_price(selected_row['tp'])} | "
+        f"Entry Zone: {selected_row['entry_zone']} | "
+        f"Status: {selected_row['entry_status']} | "
+        f"TP1/2/3: {selected_row['tp_zone']} | "
         f"SL: {fmt_price(selected_row['sl'])} | "
         f"Support: {fmt_price(selected_row['support'])} | "
         f"Resistance: {fmt_price(selected_row['resistance'])}"
