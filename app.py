@@ -281,6 +281,200 @@ def build_telegram_alerts(df: pd.DataFrame):
 
     return alert_df.sort_values(["score_accum", "score_total", "rvol", "gain"], ascending=[False, False, False, False]).reset_index(drop=True)
 
+
+# =========================================================
+# FINAL TELEGRAM BOX ENGINE — TOP SIGNAL + EMOJI + ANTI SPAM
+# =========================================================
+def signal_emoji(signal: str, gain=None) -> str:
+    s = str(signal).upper()
+    if s in ["SUPER", "ON TRACK", "AKUM", "HAKA", "GC NOW"]:
+        return "🔥"
+    if s == "REBOUND":
+        return "🔄"
+    if s in ["DIST", "WASPADA OB"]:
+        return "⚠️"
+    if s in ["DEAD", "BREAKDOWN", "EXIT"]:
+        return "💀"
+    if gain is not None and not pd.isna(gain):
+        return "📈" if gain >= 0 else "📉"
+    return "⏳"
+
+
+def buy_sell_label(row) -> str:
+    signal = str(row.get("sinyal", "")).upper()
+    score_accum = row.get("score_accum", 0)
+    score_total = row.get("score_total", 0)
+    rvol = row.get("rvol", 0)
+    trend = str(row.get("trend", "")).upper()
+    rsi = row.get("rsi", np.nan)
+
+    if signal in ["SUPER", "ON TRACK", "AKUM", "HAKA", "GC NOW"] and score_accum >= 65 and rvol >= 120:
+        return "🔥 BUY / TOP SIGNAL"
+    if signal == "REBOUND" and score_accum >= 55 and not pd.isna(rsi) and rsi < 45:
+        return "🔄 BUY REBOUND"
+    if signal in ["DIST", "WASPADA OB"] or trend == "BEAR":
+        return "⚠️ SELL / AVOID"
+    if score_accum >= 55 or score_total >= 8:
+        return "👀 WATCH"
+    return "⏳ WAIT"
+
+
+def risk_label(score_accum, rsi, trend, signal) -> str:
+    signal = str(signal).upper()
+    trend = str(trend).upper()
+
+    if signal in ["DIST", "WASPADA OB"] or trend == "BEAR":
+        return "HIGH"
+    if not pd.isna(rsi) and rsi >= 72:
+        return "HIGH"
+    if score_accum >= 70:
+        return "LOW"
+    if score_accum >= 50:
+        return "MEDIUM"
+    return "HIGH"
+
+
+def momentum_label(row) -> str:
+    score = row.get("score_total", 0)
+    rvol = row.get("rvol", 0)
+    rsi = row.get("rsi", np.nan)
+
+    if score >= 10 and rvol >= 150 and not pd.isna(rsi) and 50 <= rsi <= 70:
+        return "KUAT"
+    if score >= 6:
+        return "SEDANG"
+    return "LEMAH"
+
+
+def safe_text(value, default="-"):
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    return str(value)
+
+
+def build_box_telegram_message(row, rank: int = 1):
+    symbol = safe_text(row.get("symbol"))
+    now = fmt_price(row.get("now", np.nan))
+    gain = fmt_pct(row.get("gain", np.nan))
+    rvol = fmt_pct(row.get("rvol", np.nan))
+    value = human_value(row.get("val", np.nan))
+    rsi = rsi_cell_text(row.get("rsi", np.nan))
+    rsi5 = rsi_cell_text(row.get("rsi_5m", np.nan))
+
+    trend = safe_text(row.get("trend"))
+    fase = safe_text(row.get("fase"))
+    sinyal = safe_text(row.get("sinyal"))
+    aksi = safe_text(row.get("aksi"))
+    rekomendasi = buy_sell_label(row)
+    emoji = signal_emoji(sinyal, row.get("gain", np.nan))
+
+    entry = fmt_price(row.get("entry", np.nan))
+    sl = fmt_price(row.get("sl", np.nan))
+    tp = fmt_price(row.get("tp", np.nan))
+    profit = fmt_pct(row.get("profit", np.nan))
+    to_tp = fmt_pct(row.get("to_tp", np.nan))
+
+    arah = "▼" if not pd.isna(row.get("gain", np.nan)) and row.get("gain", 0) < 0 else "▲"
+    score_accum = int(row.get("score_accum", 0))
+    score_total = int(row.get("score_total", 0))
+    score_bandar = int(row.get("score_bandar", 0))
+    score_scalping = int(row.get("score_scalping", 0))
+    risk = risk_label(score_accum, row.get("rsi", np.nan), trend, sinyal)
+    momentum = momentum_label(row)
+
+    message = f"""<pre>
+┌──────────────────────────────────────────────┐
+│ #{rank:<2} {emoji} {symbol:<6} | AI STOCK SCREENER        │
+│ Harga : {now:<8} {arah} {gain:<10}           │
+│ RVOL  : {rvol:<8} | Value : {value:<10}      │
+├──────────────────────────────────────────────┤
+│ Rekomendasi : {rekomendasi:<24}│
+│ Aksi        : {aksi:<24}│
+│ Trend       : {trend:<24}│
+│ Fase        : {fase:<24}│
+│ RSI / 5M    : {rsi:<8} / {rsi5:<13}│
+├──────────────────────────────────────────────┤
+│ AI Akum     : {score_accum:<24}│
+│ AI Total    : {score_total:<24}│
+│ Bandar      : {score_bandar:<24}│
+│ Scalping    : {score_scalping:<24}│
+│ Momentum    : {momentum:<24}│
+│ Risiko      : {risk:<24}│
+├──────────────────────────────────────────────┤
+│ Sinyal      : {sinyal:<24}│
+│ Entry       : {entry:<24}│
+│ Stop Loss   : {sl:<24}│
+│ Take Profit : {tp:<24}│
+│ Profit      : {profit:<24}│
+│ Sisa ke TP  : {to_tp:<24}│
+└──────────────────────────────────────────────┘
+</pre>"""
+    return message
+
+
+def get_top_signal_df(df: pd.DataFrame, top_n: int = 5):
+    if df.empty:
+        return pd.DataFrame()
+
+    x = df.copy()
+    strong_signals = ["SUPER", "ON TRACK", "AKUM", "HAKA", "GC NOW", "REBOUND"]
+
+    x["telegram_rank_score"] = (
+        x["score_accum"].fillna(0) * 2.0 +
+        x["score_total"].fillna(0) * 3.0 +
+        x["rvol"].fillna(0) * 0.08 +
+        x["gain"].fillna(0) * 1.5 +
+        x["sinyal"].isin(strong_signals).astype(int) * 25
+    )
+
+    # TOP SIGNAL: prioritas sinyal kuat, tapi tetap fallback ke ranking terbaik bila belum ada yang kuat.
+    top_signal = x[
+        (
+            (x["score_accum"] >= 55) &
+            (x["rvol"] >= 100) &
+            (x["sinyal"].isin(strong_signals))
+        ) |
+        (
+            (x["score_accum"] >= 70) &
+            (x["score_total"] >= 8)
+        )
+    ].copy()
+
+    if top_signal.empty:
+        top_signal = x.copy()
+
+    return top_signal.sort_values(
+        ["telegram_rank_score", "score_accum", "score_total", "rvol", "gain"],
+        ascending=[False, False, False, False, False]
+    ).head(top_n).reset_index(drop=True)
+
+
+def build_telegram_watchlist_message(df: pd.DataFrame, top_n: int = 5):
+    if df.empty:
+        return "📭 <b>Tidak ada saham yang lolos filter</b>"
+
+    scan_time = st.session_state.get("last_run", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    picked = get_top_signal_df(df, top_n=top_n)
+
+    header = f"🚨 <b>TOP {len(picked)} SIGNAL AI SCREENER</b>\n🕒 <b>{scan_time}</b>\n"
+    boxes = [build_box_telegram_message(row, rank=i) for i, (_, row) in enumerate(picked.iterrows(), start=1)]
+    return header + "\n" + "\n".join(boxes)
+
+
+def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
+    if df.empty:
+        return "📭 <b>Tidak ada alert kuat</b>"
+    return build_telegram_watchlist_message(df, top_n=top_n)
+
+
+def build_telegram_alerts(df: pd.DataFrame):
+    return get_top_signal_df(df, top_n=5)
+
 # =========================================================
 # DATA SOURCE
 # =========================================================
@@ -964,14 +1158,14 @@ def show_detail_chart(df: pd.DataFrame, symbol_name: str):
 # =========================================================
 # HEADER
 # =========================================================
-st.title("HIGH PROB SCREENER V2.0 — TOP 30 AKUMULASI")
+st.title("HIGH PROB SCREENER FINAL — TOP SIGNAL + TELEGRAM")
 st.markdown('<div class="small-note">fokus saham akumulasi + RVOL tinggi | ranking 30 terbaik | harga maksimal 1000 | auto refresh + telegram bot</div>', unsafe_allow_html=True)
 
 # =========================================================
 # SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.header("Pengaturan")
+    st.header("Pengaturan Final Screener")
 
     watchlist_name = st.selectbox("Preset Watchlist", list(WATCHLISTS.keys()), index=0)
     period = st.selectbox("Periode", ["3mo", "6mo", "1y", "2y"], index=1)
@@ -988,7 +1182,7 @@ with st.sidebar:
     telegram_bot_token = st.text_input("Bot Token", type="password")
     telegram_chat_id = st.text_input("Chat ID")
     telegram_top_n = st.number_input("Kirim Top N", min_value=1, max_value=30, value=5, step=1)
-    send_only_alerts = st.checkbox("Kirim hanya alert kuat", value=False)
+    send_only_alerts = st.checkbox("Kirim hanya TOP SIGNAL", value=True)
     send_test_btn = st.button("Tes Kirim Telegram", use_container_width=True)
 
     if send_test_btn:
@@ -1055,15 +1249,15 @@ alert_df = build_telegram_alerts(display_df)
 # AUTO TELEGRAM NOTIF (ANTI SPAM)
 # =========================================================
 if telegram_enabled and auto_refresh and telegram_bot_token and telegram_chat_id and not display_df.empty:
-    source_df = alert_df.head(5) if send_only_alerts else display_df.head(5)
+    source_df = get_top_signal_df(display_df, top_n=int(telegram_top_n)) if send_only_alerts else display_df.head(int(telegram_top_n))
     current_alert_key = "|".join([f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}" for _, row in source_df.iterrows()])
     last_alert_key = st.session_state.get("last_alert_key", "")
 
     if current_alert_key != last_alert_key:
         if send_only_alerts:
-            message = build_telegram_strong_alert_message(source_df, top_n=5)
+            message = build_telegram_strong_alert_message(source_df, top_n=int(telegram_top_n))
         else:
-            message = build_telegram_watchlist_message(source_df, top_n=5)
+            message = build_telegram_watchlist_message(source_df, top_n=int(telegram_top_n))
 
         ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
         if ok:
@@ -1099,15 +1293,15 @@ with cbtn2:
 # =========================================================
 if telegram_enabled and send_now_btn:
     if send_only_alerts:
-        target_df = alert_df.head(5)
-        message = build_telegram_strong_alert_message(target_df, top_n=5)
+        target_df = get_top_signal_df(display_df, top_n=int(telegram_top_n))
+        message = build_telegram_strong_alert_message(target_df, top_n=int(telegram_top_n))
     else:
-        target_df = display_df.head(5)
-        message = build_telegram_watchlist_message(target_df, top_n=5)
+        target_df = display_df.head(int(telegram_top_n))
+        message = build_telegram_watchlist_message(target_df, top_n=int(telegram_top_n))
 
     ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
     if ok:
-        st.success("5 emiten terbaik berhasil dikirim ke Telegram.")
+        st.success(f"TOP {int(telegram_top_n)} SIGNAL berhasil dikirim ke Telegram.")
     else:
         st.error(f"Gagal kirim Telegram: {msg}")
 
@@ -1124,7 +1318,7 @@ components.html(
 # =========================================================
 # ALERT TABLE
 # =========================================================
-st.subheader("🚨 Alert Kuat (Siap Kirim Telegram)")
+st.subheader("🚨 TOP SIGNAL Telegram")
 if alert_df.empty:
     st.info("Belum ada saham dengan kriteria akumulasi kuat.")
 else:
