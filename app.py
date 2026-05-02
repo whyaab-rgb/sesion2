@@ -475,6 +475,38 @@ def build_telegram_strong_alert_message(df: pd.DataFrame, top_n: int = 5):
 def build_telegram_alerts(df: pd.DataFrame):
     return get_top_signal_df(df, top_n=5)
 
+
+def send_telegram_rows(bot_token: str, chat_id: str, df: pd.DataFrame, top_n: int = 5):
+    """
+    Kirim Telegram per saham supaya tidak kena limit 4096 karakter.
+    Return: (jumlah_sukses, pesan_error_terakhir)
+    """
+    if df.empty:
+        ok, msg = send_telegram_message(bot_token, chat_id, "📭 <b>Tidak ada TOP SIGNAL</b>")
+        return (1 if ok else 0), msg
+
+    picked = get_top_signal_df(df, top_n=top_n)
+    scan_time = st.session_state.get("last_run", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    success_count = 0
+    failed_msg = ""
+
+    for rank, (_, row) in enumerate(picked.iterrows(), start=1):
+        header = f"🚨 <b>TOP SIGNAL #{rank}</b>\n🕒 <b>{scan_time}</b>\n"
+        message = header + build_box_telegram_message(row, rank=rank)
+
+        # Pengaman tambahan: kalau suatu saat box terlalu panjang, potong dengan aman.
+        if len(message) > 3900:
+            message = message[:3850] + "\n<pre>...dipotong agar tidak melewati limit Telegram...</pre>"
+
+        ok, msg = send_telegram_message(bot_token, chat_id, message)
+        if ok:
+            success_count += 1
+        else:
+            failed_msg = msg
+
+    return success_count, failed_msg
+
 # =========================================================
 # DATA SOURCE
 # =========================================================
@@ -1249,22 +1281,26 @@ alert_df = build_telegram_alerts(display_df)
 # AUTO TELEGRAM NOTIF (ANTI SPAM)
 # =========================================================
 if telegram_enabled and auto_refresh and telegram_bot_token and telegram_chat_id and not display_df.empty:
-    source_df = get_top_signal_df(display_df, top_n=int(telegram_top_n)) if send_only_alerts else display_df.head(int(telegram_top_n))
-    current_alert_key = "|".join([f"{row['symbol']}-{int(row['score_accum'])}-{row['sinyal']}" for _, row in source_df.iterrows()])
+    source_df = get_top_signal_df(display_df, top_n=int(telegram_top_n))
+    current_alert_key = "|".join([
+        f"{row['symbol']}-{int(row['score_accum'])}-{int(row['score_total'])}-{row['sinyal']}"
+        for _, row in source_df.iterrows()
+    ])
     last_alert_key = st.session_state.get("last_alert_key", "")
 
     if current_alert_key != last_alert_key:
-        if send_only_alerts:
-            message = build_telegram_strong_alert_message(source_df, top_n=int(telegram_top_n))
-        else:
-            message = build_telegram_watchlist_message(source_df, top_n=int(telegram_top_n))
+        success_count, failed_msg = send_telegram_rows(
+            telegram_bot_token,
+            telegram_chat_id,
+            source_df,
+            top_n=int(telegram_top_n)
+        )
 
-        ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
-        if ok:
+        if success_count > 0:
             st.session_state["last_alert_key"] = current_alert_key
-            st.success("Auto notif Telegram terkirim")
+            st.success(f"✅ Auto notif Telegram terkirim: {success_count} saham.")
         else:
-            st.warning(f"Gagal auto notif: {msg}")
+            st.warning(f"❌ Gagal auto notif Telegram: {failed_msg}")
 
 # =========================================================
 # TOP METRICS
@@ -1292,18 +1328,19 @@ with cbtn2:
 # KIRIM MANUAL
 # =========================================================
 if telegram_enabled and send_now_btn:
-    if send_only_alerts:
-        target_df = get_top_signal_df(display_df, top_n=int(telegram_top_n))
-        message = build_telegram_strong_alert_message(target_df, top_n=int(telegram_top_n))
-    else:
-        target_df = display_df.head(int(telegram_top_n))
-        message = build_telegram_watchlist_message(target_df, top_n=int(telegram_top_n))
+    target_df = get_top_signal_df(display_df, top_n=int(telegram_top_n))
 
-    ok, msg = send_telegram_message(telegram_bot_token, telegram_chat_id, message)
-    if ok:
-        st.success(f"TOP {int(telegram_top_n)} SIGNAL berhasil dikirim ke Telegram.")
+    success_count, failed_msg = send_telegram_rows(
+        telegram_bot_token,
+        telegram_chat_id,
+        target_df,
+        top_n=int(telegram_top_n)
+    )
+
+    if success_count > 0:
+        st.success(f"✅ TOP SIGNAL berhasil dikirim ke Telegram: {success_count} saham.")
     else:
-        st.error(f"Gagal kirim Telegram: {msg}")
+        st.error(f"❌ Gagal kirim Telegram: {failed_msg}")
 
 # =========================================================
 # MAIN TABLE
