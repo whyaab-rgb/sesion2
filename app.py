@@ -2,6 +2,9 @@ import time
 import requests
 import textwrap
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+WIB = ZoneInfo("Asia/Jakarta")
 
 import numpy as np
 import pandas as pd
@@ -1201,7 +1204,7 @@ with st.sidebar:
 # TELEGRAM TEST
 # =========================================================
 if send_test_btn:
-    now_text = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    now_text = datetime.now(WIB).strftime("%d-%m-%Y %H:%M:%S WIB")
     test_message = (
         "🤖 <b>Test Notifikasi Berhasil</b>\n"
         "✅ Bot Telegram sudah terhubung.\n\n"
@@ -1253,7 +1256,7 @@ if should_run:
         )
         st.session_state["raw_screener_df"] = raw_df
         st.session_state["failed_count"] = failed_count
-        st.session_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["last_run"] = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
 
 raw_df = st.session_state.get("raw_screener_df", pd.DataFrame())
 failed_count = st.session_state.get("failed_count", 0)
